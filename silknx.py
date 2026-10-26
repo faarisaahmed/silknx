@@ -48,7 +48,7 @@ def main():
         print(f'Removed {d}')
         return
 
-    if not os.path.exists(os.path.join(ROOT, 'game', 'dump.json')) or not os.path.isdir(os.path.join(ROOT, 'pcref')):
+    if not os.path.exists(os.path.join(ROOT, 'game', 'dump.json')):
         print('First run: doing setup.\n')
         import setup_game
         setup_game.run(a.nsp, a.keys, a.pc)

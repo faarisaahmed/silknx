@@ -42,7 +42,11 @@ def convert(plugins_dir, name='SilkNX', config_dir=None, install=False, only=Non
     if only:
         dlls = [d for d in dlls if any(o.lower() in os.path.basename(d).lower() for o in only)]
     print(f'silkport: {len(dlls)} assemblies from {plugins_dir}')
-    u, mods = load_universe(dlls, REF_DIRS)
+    game = os.path.join(ROOT, 'game')
+    switch = (os.path.join(game, 'exefs', 'main'),
+              os.path.join(game, 'romfs', 'Data', 'Managed', 'Metadata', 'global-metadata.dat'))
+    u, mods = load_universe(dlls, [os.path.join(ROOT, 'pcref', 'Managed')], switch=switch)
+    print(f'  game types from the Switch build; PC copy: {"yes (optional extras enabled)" if u.has_pc else "not used"}')
     db = SwitchDB()
     tr = Translator(u, db, mods, implemented_shims())
     hp = HarmonyPass(tr)

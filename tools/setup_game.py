@@ -2,7 +2,7 @@
 
 1. Decrypts the Switch game (NSP + prod.keys) in memory and extracts the code + IL2CPP metadata into game/.
 2. Builds the IL2CPP dump (every class, field offset and function address) into game/dump.json.
-3. Copies the PC game's managed DLLs (read-only) into pcref/ so mods can be understood.
+3. Optional (--pc): copies a PC copy's managed DLLs, used only for the rare functions the Switch build stripped.
 """
 import os
 import shutil
@@ -83,26 +83,18 @@ def run(nsp=None, keys=None, pc=None):
                 os.path.join(GAME, 'dump.json'), '--cs', os.path.join(GAME, 'dump.cs')]
     il2cpp_dump.main()
 
-    # --- PC reference assemblies
-    say('looking for your PC copy of Silksong...')
-    managed = pp.managed_from_user_path(pc) if pc else pp.find_pc_managed()
-    if not managed:
-        fail('Could not find a PC copy of Silksong (needed to understand PC mods).\n'
-             '    Pass its folder with  --pc "/path/to/Hollow Knight Silksong"')
-    say(f'PC game:  {managed}')
-    shutil.rmtree(PCREF, ignore_errors=True)
-    os.makedirs(os.path.join(PCREF, 'Managed'))
-    os.makedirs(os.path.join(PCREF, 'core'))
-    for f in os.listdir(managed):
-        if f.endswith('.dll'):
-            shutil.copy(os.path.join(managed, f), os.path.join(PCREF, 'Managed', f))
-    core = pp.bepinex_core_near(managed)
-    if core:
-        for f in os.listdir(core):
+    # --- optional: PC copy (only used for the rare functions the Switch build stripped out)
+    managed = pp.managed_from_user_path(pc) if pc else None
+    if pc and not managed:
+        fail(f'No Silksong PC files found in {pc}')
+    if managed:
+        shutil.rmtree(PCREF, ignore_errors=True)
+        os.makedirs(os.path.join(PCREF, 'Managed'))
+        for f in os.listdir(managed):
             if f.endswith('.dll'):
-                shutil.copy(os.path.join(core, f), os.path.join(PCREF, 'core', f))
-        say(f'BepInEx:  {core}')
+                shutil.copy(os.path.join(managed, f), os.path.join(PCREF, 'Managed', f))
+        say(f'PC copy:  {managed} (optional extras enabled)')
     else:
-        say('BepInEx:  not found next to the PC game (optional)')
+        say('PC copy:  not used (not needed; only a few rare mods ask for it)')
 
     print('\nSetup complete. Put mods in the plugins/ folder and run:  python3 silknx.py\n')

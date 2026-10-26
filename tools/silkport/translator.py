@@ -55,6 +55,8 @@ class Translator:
 
     # ---------------------------------------------------------- functions
     def fn(self, md, targs=(), margs=()):
+        if getattr(md.asm, 'kind', None) == 'il2cpp':
+            md = self.u.pc_method(md) or md  # translate from the PC copy's IL when available
         key = (id(md), tuple(targs), tuple(margs))
         name = self.fn_names.get(key)
         if name is None:
@@ -74,8 +76,8 @@ class Translator:
                 continue
             self.report.cur_asm = md.asm.name if md.asm in self.mod_asms else self.report.cur_asm
             if md.body() is None:
-                self.funcs[name] = (None, None)
-                self.report.add('error', f'no IL body for {md}')
+                self.funcs[name] = self.stub(md, targs, margs, name, 'needs the PC copy')
+                self.report.add('error', self.needs_pc(str(md)))
                 continue
             try:
                 mt = MethodTranslator(self, md, targs, margs, name)
@@ -108,6 +110,12 @@ class Translator:
         if ret != 'void':
             body.append(f'    return {ret}{{}};')
         return head, body + ['}']
+
+    def needs_pc(self, what):
+        if self.u.has_pc:
+            return f'{what} does not exist in either the Switch or the PC version of the game'
+        return (f'{what} was removed from the Switch version of the game; converting this needs a PC copy '
+                f'(run: python3 silknx.py setup --pc "/path/to/Hollow Knight Silksong")')
 
     def owner_sig(self, td, targs):
         vt = self.u.is_valuetype_def(td)
@@ -676,9 +684,17 @@ class CallEmitter:
                 'def': definition, 'raw_params': params, 'otargs': otargs}
 
     def find_def(self, owner, name, params, gpc):
+        if owner[0] == 'prim' and owner[1] in PRIM_KEYS:
+            owner = ('class', PRIM_KEYS[owner[1]])
         if owner[0] not in ('class', 'vt', 'gi'):
             return None
-        td = self.tr.u.get(owner[1])
+        m = self._find_in(self.tr.u.types, owner[1], name, params, gpc)
+        if m is None and self.tr.u.pc_types:
+            m = self._find_in(self.tr.u.pc_types, owner[1], name, params, gpc)
+        return m
+
+    def _find_in(self, types, key, name, params, gpc):
+        td = types.get(key)
         while td is not None:
             for m in td.methods:
                 if m.name == name and len(m.params) == len(params) and m.gparam_count == gpc:
@@ -689,7 +705,7 @@ class CallEmitter:
                     return m
             if td.extends is None:
                 break
-            td = self.tr.u.get(td.extends[1])
+            td = types.get(td.extends[1])
         return None
 
     def this_sig(self, c):
@@ -804,7 +820,7 @@ class CallEmitter:
                     tr.report.add('info', f'translated from PC IL (stripped on Switch): {self.describe(c)}')
                     fn = tr.fn(md, c['otargs'], c['margs'])
                     return f'{fn}({", ".join(allx + ["nullptr"])})', None
-                tr.report.add('error', f'missing on Switch: {self.describe(c)} (used by {where})')
+                tr.report.add('error', tr.needs_pc(f'{self.describe(c)} (used by {where})'))
                 return self.unsupported_call(c, where), None
             if this is not None and not ts.is_vt(c['owner']):
                 allx[0] = f'rt_nc({allx[0]})'
@@ -816,7 +832,8 @@ class CallEmitter:
                 site = self.reflect_site(c)
                 return f'(({ft})RT_SITE_FP({site}))({", ".join(allx + [f"RT_SITE_MI({site})"])})', None
             return f'(({ft})(silk_main_base + {dm["rva"]:#x}))({", ".join(allx + ["nullptr"])})', None
-        tr.report.add('error', f'unresolved call {self.describe(c)} (used by {where})')
+        tr.report.add('error', tr.needs_pc(f'{self.describe(c)} (used by {where})') if origin == 'unknown'
+                      else f'unresolved call {self.describe(c)} (used by {where})')
         return self.unsupported_call(c, where), None
 
     def needs_fallback(self, c):
@@ -1047,7 +1064,7 @@ class CallEmitter:
                 if md is not None and md.body() is not None:
                     fn = tr.fn(md, c['otargs'])
                     return (lambda v: [f'{v} = rt_new_obj({tref});', f'{fn}({", ".join([v] + argx + ["nullptr"])});']), owner
-                tr.report.add('error', f'missing on Switch: {self.describe(c)} (used by {where})')
+                tr.report.add('error', tr.needs_pc(f'{self.describe(c)} (used by {where})'))
                 return (lambda v: [f'{v} = nullptr;', self.unsupported_call(c, where) + ';']), owner
             if c['otargs'] or not dm['rva']:
                 site = self.reflect_site(c)

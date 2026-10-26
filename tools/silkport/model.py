@@ -590,19 +590,54 @@ class Universe:
 
     def __init__(self):
         self.asms = []
-        self.types = {}  # key -> TypeDef (first definition wins; mods are loaded first)
+        self.types = {}  # key -> TypeDef (first definition wins: mods, then the Switch game, then a PC copy)
         self.asm_attrs = {}
+        self.pc_types = {}  # key -> TypeDef from an (optional) PC copy, used for IL of stripped methods
+        self.has_pc = False
+        self._twins = {}
 
-    def load(self, path):
+    def load(self, path, pc=False):
         a = Asm(path, self)
         self.asms.append(a)
         for td in a.typedefs:
             self.types.setdefault(td.key, td)
+            if pc:
+                self.pc_types.setdefault(td.key, td)
+        if pc:
+            self.has_pc = True
         return a
+
+    def load_switch(self, main_path, metadata_path):
+        from .il2cpp_model import load_il2cpp
+        for a in load_il2cpp(self, main_path, metadata_path):
+            self.asms.append(a)
+            for td in a.typedefs:
+                if td.extends is not None and td.extends[0] == 'prim':
+                    td.extends = ('class', PRIM_KEYS[td.extends[1]])
+                self.types.setdefault(td.key, td)
 
     def finish(self):
         for a in self.asms:
-            a.finish()
+            if getattr(a, 'kind', None) != 'il2cpp':
+                a.finish()
+
+    def pc_method(self, md):
+        """The PC copy's version (with IL) of a game method, or None."""
+        key = id(md)
+        if key in self._twins:
+            return self._twins[key]
+        twin = None
+        td = self.pc_types.get(md.owner.key)
+        if td is not None:
+            want = [sig_str(p) for p in md.params]
+            for m in td.methods:
+                if m.name == md.name and m.gparam_count == md.gparam_count and len(m.params) == len(want):
+                    if [sig_str(p) for p in m.params] == want:
+                        twin = m
+                        break
+                    twin = twin or m
+        self._twins[key] = twin
+        return twin
 
     def get(self, key):
         return self.types.get(key)
@@ -612,10 +647,14 @@ class Universe:
             return False
         if td.key in ('System.Enum',):
             return False
+        if hasattr(td, 'il2cpp_vt'):
+            return td.il2cpp_vt
         r = self.asm_row_extends(td)
         return r in ('System.ValueType', 'System.Enum') and td.key != 'System.ValueType'
 
     def asm_row_extends(self, td):
+        if getattr(td.asm, 'kind', None) == 'il2cpp':
+            return td.extends[1] if td.extends else None
         tds = td.asm.tables[0x02]
         tag, idx = tds[td.idx - 1][3]
         if not idx:
@@ -627,6 +666,8 @@ class Universe:
         return None
 
     def is_valuetype_key(self, key):
+        if key in EMU_VALUETYPES:
+            return True
         return self.is_valuetype_def(self.types.get(key))
 
     def is_enum(self, td):
@@ -651,14 +692,23 @@ class Universe:
         return False
 
 
-def load_universe(mod_paths, ref_dirs):
+# BepInEx value types (BepInEx itself is emulated, so its DLLs are not needed).
+EMU_VALUETYPES = {'BepInEx.Configuration.KeyboardShortcut'}
+
+
+def load_universe(mod_paths, ref_dirs, switch=None):
+    """Mods first, then the Switch game's own types (switch=(main, metadata)), then optional PC references."""
     u = Universe()
     mods = [u.load(p) for p in mod_paths]
+    if switch:
+        u.load_switch(*switch)
     for d in ref_dirs:
+        if not os.path.isdir(d):
+            continue
         for f in sorted(os.listdir(d)):
             if f.endswith('.dll'):
                 try:
-                    u.load(os.path.join(d, f))
+                    u.load(os.path.join(d, f), pc=True)
                 except Exception as e:  # native or odd DLLs
                     print(f'  (skipping {f}: {e})', file=sys.stderr)
     u.finish()

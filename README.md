@@ -5,8 +5,8 @@ game, in the Ryujinx emulator (and experimentally on a modded Switch).
 
 Drop your mod `.dll` files into a folder, run one command, start the game.
 
-> **No game files are included in this repository.** SilkNX works from *your own* copies: a Switch NSP you
-> dumped from your own console, your console's `prod.keys`, and your PC copy of Silksong.
+> **No game files are included in this repository.** SilkNX works from *your own* Switch game: an NSP you
+> dumped from your own console and your console's `prod.keys`. **You do not need the PC version.**
 
 ---
 
@@ -18,7 +18,6 @@ Drop your mod `.dll` files into a folder, run one command, start the game.
 | **Ryujinx** | with Silksong already working in it |
 | **Your Silksong `.nsp`** | dumped from your own Switch (base game) |
 | **`prod.keys`** | the same keys Ryujinx uses (already in Ryujinx if the game runs) |
-| **Silksong for PC** (Steam/GOG, any OS) | needed so SilkNX can understand PC mods; it is only read, never changed |
 | **Python 3.9+** | comes with macOS developer tools / most Linux |
 | **LLVM 18** | the compiler (install below) |
 
@@ -34,13 +33,18 @@ brew install llvm@18          # Linux: sudo apt install clang-18 lld-18
 python3 silknx.py setup
 ```
 
-`setup` finds everything automatically (your NSP in Downloads/Desktop/Documents, the keys inside Ryujinx,
-your PC copy of the game) and takes a few seconds. If it can't find something it tells you exactly what to
-pass, for example:
+`setup` finds everything automatically (your NSP in Downloads/Desktop/Documents and the keys inside Ryujinx)
+and takes a few seconds. If it can't find something it tells you exactly what to pass, for example:
 
 ```sh
-python3 silknx.py setup --nsp ~/Games/Silksong.nsp --pc "/path/to/Hollow Knight Silksong"
+python3 silknx.py setup --nsp ~/Games/Silksong.nsp --keys ~/switch/prod.keys
 ```
+
+Everything SilkNX needs to understand mods comes from the Switch game itself.
+
+**Optional, rarely needed:** a few mods call functions that Nintendo's build of the game left out. The report
+names them and says "needs a PC copy". Only if you want those, and you own Silksong on PC, run once:
+`python3 silknx.py setup --pc "/path/to/Hollow Knight Silksong"`.
 
 ## Use
 
@@ -75,7 +79,7 @@ SilkNX translates each mod's compiled C# into native Switch code and emulates th
 | Works | Not (yet) |
 |---|---|
 | BepInEx plugins, `Logger`, config files (`Bind`, `.Value`) | Harmony **transpilers** and finalizers |
-| Harmony **prefixes/postfixes** (`__instance`, `__result`, `__state`, `___fields`, attribute & `TargetMethod()` targets) | Windows/dialogs that need a mouse (e.g. config GUIs) |
+| Harmony **prefixes/postfixes** (`__instance`, `__result`, `__state`, `___fields`, attribute & `TargetMethod()` targets) | Windows/dialogs that need a mouse (e.g. config GUIs; settings still load from your `.cfg`) |
 | Your own `MonoBehaviour`s: `Awake/Start/Update/LateUpdate/FixedUpdate/OnGUI/OnEnable/OnDisable/OnDestroy` | Networking mods (e.g. multiplayer) |
 | Coroutines, `GetComponent/AddComponent<T>`, textures from the mod folder, Unity UI, IMGUI | Mods that depend on APIs added after the Switch version's build |
 | Generic collections, LINQ, delegates, events, exceptions thrown by mods | Some exceptions thrown *by the game itself* inside a mod |
@@ -104,6 +108,7 @@ Copy the generated `atmosphere` folder to the root of your SD card (Atmosphère 
 
 * `tools/switchfs.py`, `tools/nca_extract.py`: read the NSP with your keys, extract the game code and IL2CPP metadata.
 * `tools/il2cpp_dump.py`: maps every class, field offset and function address of the Switch build.
+* `tools/silkport/il2cpp_model.py`: builds the converter's full type model from the Switch metadata (no PC files).
 * `tools/silkport/`: the converter: reads mod DLLs (`model.py`), translates IL to C++ (`translate.py`,
   `translator.py`), turns Harmony patches into native hooks (`harmony.py`).
 * `sdk/rt/`: the runtime the translated mods run on (object model, BepInEx/Harmony/Unity emulation, input,
