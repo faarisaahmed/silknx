@@ -1,0 +1,22 @@
+# Generated from YOUR game files by `silknx.py setup` - never commit (copyrighted)
+game/
+pcref/
+# Build output
+build/
+out/
+__pycache__/
+*.pyc
+# Your mods and configs (drop folders)
+plugins/*
+!plugins/.gitkeep
+config/*
+!config/.gitkeep
+# Never commit keys or game dumps
+*.keys
+*.nsp
+*.xci
+*.nca
+# Local test material
+pcmods/
+testplugins*/
+.DS_Store

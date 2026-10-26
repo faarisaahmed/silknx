@@ -1,0 +1,444 @@
+{
+  "hooks": [
+    {
+      "name": "RT_Boot",
+      "method": "CoreLoop::Init",
+      "argc": 0
+    },
+    {
+      "name": "SS_Awake",
+      "method": "SlideSurface::Awake",
+      "argc": 0
+    },
+    {
+      "name": "SS_OnEnable",
+      "method": "SlideSurface::OnEnable",
+      "argc": 0
+    },
+    {
+      "name": "SS_Start",
+      "method": "SlideSurface::Start",
+      "argc": 0
+    },
+    {
+      "name": "SS_OnDisable",
+      "method": "SlideSurface::OnDisable",
+      "argc": 0
+    },
+    {
+      "name": "SS_OnDestroy",
+      "method": "SlideSurface::OnDestroy",
+      "argc": 0
+    },
+    {
+      "name": "SS_Update",
+      "method": "SlideSurface::Update",
+      "argc": 0
+    },
+    {
+      "name": "SS_FixedUpdate",
+      "method": "SlideSurface::FixedUpdate",
+      "argc": 0
+    },
+    {
+      "name": "SS_OnTriggerEnter2D",
+      "method": "SlideSurface::OnTriggerEnter2D",
+      "argc": 1
+    },
+    {
+      "name": "SS_OnTriggerStay2D",
+      "method": "SlideSurface::OnTriggerStay2D",
+      "argc": 1
+    },
+    {
+      "name": "SS_OnTriggerExit2D",
+      "method": "SlideSurface::OnTriggerExit2D",
+      "argc": 1
+    },
+    {
+      "name": "UB_Update",
+      "method": "UpdateBatcher::Update",
+      "argc": 0
+    },
+    {
+      "name": "UB_LateUpdate",
+      "method": "UpdateBatcher::LateUpdate",
+      "argc": 0
+    },
+    {
+      "name": "UB_FixedUpdate",
+      "method": "UpdateBatcher::FixedUpdate",
+      "argc": 0
+    },
+    {
+      "name": "CP_Awake",
+      "method": "CodeProfiler::Awake",
+      "argc": 0
+    },
+    {
+      "name": "CP_Update",
+      "method": "CodeProfiler::Update",
+      "argc": 0
+    },
+    {
+      "name": "CP_OnGUI",
+      "method": "CodeProfiler::OnGUI",
+      "argc": 0
+    }
+  ],
+  "methods": [
+    {
+      "name": "String_CreateString",
+      "method": "System.String::CreateString",
+      "params": [
+        "char*",
+        "int",
+        "int"
+      ]
+    },
+    {
+      "name": "Object_ToString",
+      "method": "System.Object::ToString",
+      "argc": 0
+    },
+    {
+      "name": "Object_GetType",
+      "method": "System.Object::GetType",
+      "argc": 0
+    },
+    {
+      "name": "Type_GetType",
+      "method": "System.Type::GetType",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "Type_GetMethod5",
+      "method": "System.Type::GetMethod",
+      "params": [
+        "string",
+        "System.Reflection.BindingFlags",
+        "System.Reflection.Binder",
+        "System.Type[]",
+        "System.Reflection.ParameterModifier[]"
+      ]
+    },
+    {
+      "name": "Type_GetConstructor4",
+      "method": "System.Type::GetConstructor",
+      "params": [
+        "System.Reflection.BindingFlags",
+        "System.Reflection.Binder",
+        "System.Type[]",
+        "System.Reflection.ParameterModifier[]"
+      ]
+    },
+    {
+      "name": "RuntimeType_GetMethods",
+      "method": "System.RuntimeType::GetMethods",
+      "params": [
+        "System.Reflection.BindingFlags"
+      ]
+    },
+    {
+      "name": "RuntimeType_IsInstanceOfType",
+      "method": "System.RuntimeType::IsInstanceOfType",
+      "params": [
+        "object"
+      ]
+    },
+    {
+      "name": "RuntimeType_MakeByRefType",
+      "method": "System.RuntimeType::MakeByRefType",
+      "argc": 0
+    },
+    {
+      "name": "RuntimeMethodInfo_MakeGenericMethod",
+      "method": "System.Reflection.RuntimeMethodInfo::MakeGenericMethod",
+      "params": [
+        "System.Type[]"
+      ]
+    },
+    {
+      "name": "FormatterServices_GetUninitializedObject",
+      "method": "System.Runtime.Serialization.FormatterServices::GetUninitializedObject",
+      "params": [
+        "System.Type"
+      ]
+    },
+    {
+      "name": "Array_CreateInstance",
+      "method": "System.Array::CreateInstance",
+      "params": [
+        "System.Type",
+        "int"
+      ]
+    },
+    {
+      "name": "GCHandle_Alloc",
+      "method": "System.Runtime.InteropServices.GCHandle::Alloc",
+      "params": [
+        "object"
+      ]
+    },
+    {
+      "name": "RuntimeHelpers_RunClassConstructor",
+      "method": "System.Runtime.CompilerServices.RuntimeHelpers::RunClassConstructor",
+      "params": [
+        "IntPtr"
+      ]
+    },
+    {
+      "name": "GameObject_ctor",
+      "method": "UnityEngine.GameObject::.ctor",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "GameObject_AddComponent",
+      "method": "UnityEngine.GameObject::AddComponent",
+      "params": [
+        "System.Type"
+      ]
+    },
+    {
+      "name": "GameObject_get_activeInHierarchy",
+      "method": "UnityEngine.GameObject::get_activeInHierarchy"
+    },
+    {
+      "name": "GameObject_get_transform",
+      "method": "UnityEngine.GameObject::get_transform"
+    },
+    {
+      "name": "Component_get_gameObject",
+      "method": "UnityEngine.Component::get_gameObject"
+    },
+    {
+      "name": "Component_get_transform",
+      "method": "UnityEngine.Component::get_transform"
+    },
+    {
+      "name": "Object_DontDestroyOnLoad",
+      "method": "UnityEngine.Object::DontDestroyOnLoad",
+      "params": [
+        "UnityEngine.Object"
+      ]
+    },
+    {
+      "name": "Object_Destroy",
+      "method": "UnityEngine.Object::Destroy",
+      "params": [
+        "UnityEngine.Object"
+      ]
+    },
+    {
+      "name": "Object_get_name",
+      "method": "UnityEngine.Object::get_name"
+    },
+    {
+      "name": "Behaviour_set_enabled",
+      "method": "UnityEngine.Behaviour::set_enabled"
+    },
+    {
+      "name": "Time_get_deltaTime",
+      "method": "UnityEngine.Time::get_deltaTime"
+    },
+    {
+      "name": "Time_get_unscaledDeltaTime",
+      "method": "UnityEngine.Time::get_unscaledDeltaTime"
+    },
+    {
+      "name": "Time_get_time",
+      "method": "UnityEngine.Time::get_time"
+    },
+    {
+      "name": "Time_get_unscaledTime",
+      "method": "UnityEngine.Time::get_unscaledTime"
+    },
+    {
+      "name": "Screen_get_width",
+      "method": "UnityEngine.Screen::get_width"
+    },
+    {
+      "name": "Screen_get_height",
+      "method": "UnityEngine.Screen::get_height"
+    },
+    {
+      "name": "GUI_Label",
+      "method": "UnityEngine.GUI::Label",
+      "params": [
+        "UnityEngine.Rect",
+        "string"
+      ]
+    },
+    {
+      "name": "GUI_DrawTexture",
+      "method": "UnityEngine.GUI::DrawTexture",
+      "params": [
+        "UnityEngine.Rect",
+        "UnityEngine.Texture"
+      ]
+    },
+    {
+      "name": "GUI_set_color",
+      "method": "UnityEngine.GUI::set_color"
+    },
+    {
+      "name": "GUI_get_skin",
+      "method": "UnityEngine.GUI::get_skin"
+    },
+    {
+      "name": "GUISkin_get_label",
+      "method": "UnityEngine.GUISkin::get_label"
+    },
+    {
+      "name": "GUIStyle_set_fontSize",
+      "method": "UnityEngine.GUIStyle::set_fontSize"
+    },
+    {
+      "name": "GUIStyle_set_alignment",
+      "method": "UnityEngine.GUIStyle::set_alignment"
+    },
+    {
+      "name": "Texture2D_get_whiteTexture",
+      "method": "UnityEngine.Texture2D::get_whiteTexture"
+    },
+    {
+      "name": "Event_get_current",
+      "method": "UnityEngine.Event::get_current"
+    },
+    {
+      "name": "Event_get_type",
+      "method": "UnityEngine.Event::get_type"
+    },
+    {
+      "name": "InputManager_get_ActiveDevice",
+      "method": "InControl.InputManager::get_ActiveDevice"
+    },
+    {
+      "name": "InputDevice_GetControl",
+      "method": "InControl.InputDevice::GetControl"
+    },
+    {
+      "name": "OneAxisInputControl_get_IsPressed",
+      "method": "InControl.OneAxisInputControl::get_IsPressed"
+    },
+    {
+      "name": "OneAxisInputControl_get_WasPressed",
+      "method": "InControl.OneAxisInputControl::get_WasPressed"
+    },
+    {
+      "name": "OneAxisInputControl_get_WasReleased",
+      "method": "InControl.OneAxisInputControl::get_WasReleased"
+    },
+    {
+      "name": "Application_get_streamingAssetsPath",
+      "method": "UnityEngine.Application::get_streamingAssetsPath"
+    },
+    {
+      "name": "File_ReadAllText",
+      "method": "System.IO.File::ReadAllText",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "File_ReadAllBytes",
+      "method": "System.IO.File::ReadAllBytes",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "File_Exists",
+      "method": "System.IO.File::Exists",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "Directory_Exists",
+      "method": "System.IO.Directory::Exists",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "String_Concat2",
+      "method": "System.String::Concat",
+      "params": [
+        "string",
+        "string"
+      ]
+    },
+    {
+      "name": "Int32_Parse",
+      "method": "System.Int32::Parse",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "Single_Parse",
+      "method": "System.Single::Parse",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "GameObject_GetComponent_Type",
+      "method": "UnityEngine.GameObject::GetComponent",
+      "params": [
+        "System.Type"
+      ]
+    },
+    {
+      "name": "Enum_Parse",
+      "method": "System.Enum::Parse",
+      "params": [
+        "System.Type",
+        "string"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "name": "Object_m_CachedPtr",
+      "field": "UnityEngine.Object::m_CachedPtr"
+    },
+    {
+      "name": "RuntimeMethodInfo_mhandle",
+      "field": "System.Reflection.RuntimeMethodInfo::mhandle"
+    },
+    {
+      "name": "RuntimeConstructorInfo_mhandle",
+      "field": "System.Reflection.RuntimeConstructorInfo::mhandle"
+    },
+    {
+      "name": "Type_impl",
+      "field": "System.Type::_impl"
+    },
+    {
+      "name": "Delegate_method_ptr",
+      "field": "System.Delegate::method_ptr"
+    },
+    {
+      "name": "Delegate_invoke_impl",
+      "field": "System.Delegate::invoke_impl"
+    },
+    {
+      "name": "Delegate_m_target",
+      "field": "System.Delegate::m_target"
+    },
+    {
+      "name": "Delegate_method",
+      "field": "System.Delegate::method"
+    },
+    {
+      "name": "Delegate_method_code",
+      "field": "System.Delegate::method_code"
+    }
+  ]
+}

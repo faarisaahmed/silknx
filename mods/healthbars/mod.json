@@ -1,0 +1,44 @@
+{
+  "name": "HealthBars",
+  "hooks": [
+    {"name": "GM_Update", "method": "GameManager::Update", "argc": 0},
+    {"name": "CP_Awake", "method": "CodeProfiler::Awake", "argc": 0},
+    {"name": "CP_Update", "method": "CodeProfiler::Update", "argc": 0},
+    {"name": "CP_OnGUI", "method": "CodeProfiler::OnGUI", "argc": 0},
+    {"name": "HM_TakeDamage", "method": "HealthManager::TakeDamage", "argc": 1},
+    {"name": "HM_OnDisable", "method": "HealthManager::OnDisable", "argc": 0}
+  ],
+  "methods": [
+    {"name": "GUI_Label", "method": "UnityEngine.GUI::Label", "params": ["UnityEngine.Rect", "string"]},
+    {"name": "GUI_DrawTexture", "method": "UnityEngine.GUI::DrawTexture", "params": ["UnityEngine.Rect", "UnityEngine.Texture"]},
+    {"name": "GUI_set_color", "method": "UnityEngine.GUI::set_color"},
+    {"name": "GUI_get_skin", "method": "UnityEngine.GUI::get_skin"},
+    {"name": "GUISkin_get_label", "method": "UnityEngine.GUISkin::get_label"},
+    {"name": "GUIStyle_set_fontSize", "method": "UnityEngine.GUIStyle::set_fontSize"},
+    {"name": "GUIStyle_set_alignment", "method": "UnityEngine.GUIStyle::set_alignment"},
+    {"name": "Texture2D_get_whiteTexture", "method": "UnityEngine.Texture2D::get_whiteTexture"},
+    {"name": "Camera_get_main", "method": "UnityEngine.Camera::get_main"},
+    {"name": "Camera_WorldToScreenPoint", "method": "UnityEngine.Camera::WorldToScreenPoint", "params": ["UnityEngine.Vector3"]},
+    {"name": "Component_get_transform", "method": "UnityEngine.Component::get_transform"},
+    {"name": "Component_get_gameObject", "method": "UnityEngine.Component::get_gameObject"},
+    {"name": "Transform_get_position", "method": "UnityEngine.Transform::get_position"},
+    {"name": "GameObject_get_activeInHierarchy", "method": "UnityEngine.GameObject::get_activeInHierarchy"},
+    {"name": "GameObject_AddComponent", "method": "UnityEngine.GameObject::AddComponent", "params": ["System.Type"]},
+    {"name": "Type_GetType", "method": "System.Type::GetType", "params": ["string"]},
+    {"name": "String_CreateString", "method": "System.String::CreateString", "params": ["sbyte*", "int", "int"]},
+    {"name": "Object_get_name", "method": "UnityEngine.Object::get_name"},
+    {"name": "Collider2D_get_bounds", "method": "UnityEngine.Collider2D::get_bounds"},
+    {"name": "Screen_get_width", "method": "UnityEngine.Screen::get_width"},
+    {"name": "Screen_get_height", "method": "UnityEngine.Screen::get_height"},
+    {"name": "Event_get_current", "method": "UnityEngine.Event::get_current"},
+    {"name": "Event_get_type", "method": "UnityEngine.Event::get_type"},
+    {"name": "Time_get_unscaledDeltaTime", "method": "UnityEngine.Time::get_unscaledDeltaTime"}
+  ],
+  "fields": [
+    {"name": "Object_m_CachedPtr", "field": "UnityEngine.Object::m_CachedPtr"},
+    {"name": "HM_hp", "field": "HealthManager::hp"},
+    {"name": "HM_initHp", "field": "HealthManager::initHp"},
+    {"name": "HM_isDead", "field": "HealthManager::isDead"},
+    {"name": "HM_boxCollider", "field": "HealthManager::boxCollider"}
+  ]
+}
