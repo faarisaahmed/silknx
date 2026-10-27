@@ -93,7 +93,7 @@ SilkNX translates each mod's compiled C# into native Switch code and emulates th
 | Harmony **prefixes/postfixes** (`__instance`, `__result`, `__state`, `___fields`, attribute & `TargetMethod()` targets) | Windows/dialogs that need a mouse (e.g. config GUIs; settings still load from your `.cfg`) |
 | Your own `MonoBehaviour`s: `Awake/Start/Update/LateUpdate/FixedUpdate/OnGUI/OnEnable/OnDisable/OnDestroy` | Networking mods (e.g. multiplayer) |
 | Coroutines, `GetComponent/AddComponent<T>`, textures from the mod folder, Unity UI, IMGUI | Mods that depend on APIs added after the Switch version's build |
-| Generic collections, LINQ, delegates, events, exceptions thrown by mods | Some exceptions thrown *by the game itself* inside a mod |
+| Generic collections, LINQ, delegates, events, exceptions (from mods *and* from the game; they are logged instead of crashing) | `try/catch` inside a mod can't catch exceptions thrown *by the game* (they're caught and logged one level up) |
 
 Tested so far: **ShowDamage HealthBar**, **Skip Intro**, **Toggle HUD**, **MapMod**.
 

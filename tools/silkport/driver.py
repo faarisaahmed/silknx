@@ -174,7 +174,7 @@ def build(plugins, config=None, name='SilkNX', install=True, atmosphere=None, on
                        include_dirs=[RT_DIR, gen],
                        extra_cflags=['-Wno-unused-label', '-Wno-unused-variable', '-Wno-unused-but-set-variable',
                                      '-Wno-unused-value', '-Wno-parentheses-equality', '-Wno-tautological-compare',
-                                     '-Wno-self-assign'],
+                                     '-Wno-self-assign'] + (['-DSILKNX_SELFTEST'] if os.environ.get('SILKNX_SELFTEST') else []),
                        romfs_dir=romfs if os.path.isdir(romfs) else None, install=False, verbose=False,
                        sdk_sources=('crt0.S', 'svc.S', 'runtime.cpp'))
     if install:

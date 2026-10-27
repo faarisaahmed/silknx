@@ -401,6 +401,21 @@
         "System.Type",
         "string"
       ]
+    },
+    {
+      "name": "RuntimeMethodInfo_GetParametersCount",
+      "method": "System.Reflection.RuntimeMethodInfo::GetParametersCount",
+      "argc": 0
+    },
+    {
+      "name": "RuntimeMethodInfo_get_IsGenericMethodDefinition",
+      "method": "System.Reflection.RuntimeMethodInfo::get_IsGenericMethodDefinition",
+      "argc": 0
+    },
+    {
+      "name": "RuntimeMethodInfo_GetGenericArguments",
+      "method": "System.Reflection.RuntimeMethodInfo::GetGenericArguments",
+      "argc": 0
     }
   ],
   "fields": [

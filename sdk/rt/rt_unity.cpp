@@ -529,6 +529,17 @@ SILK_HOOK(RT_Boot, void, const void *mi) {
     orig_RT_Boot(mi);
     if (rt_ready()) return;
     rt_boot_core();
+#ifdef SILKNX_SELFTEST
+    try {
+        rt_call<int32_t>(Int32_Parse, rt_str("not a number"));
+        silk::log("selftest: no exception?");
+    } catch (...) {
+        silk::log("selftest: caught a game exception natively - exception bridge OK");
+    }
+    RT_GUARD_BEGIN
+    rt_call<int32_t>(Int32_Parse, rt_str("still not a number"));
+    RT_GUARD_END
+#endif
     g_hosts = (HostRec *)rt_root_alloc(sizeof(HostRec) * kMaxHosts);
     g_co = (Coroutine *)rt_root_alloc(sizeof(Coroutine) * kMaxCoroutines);
     g_mid_movenext = silk_mid_movenext;

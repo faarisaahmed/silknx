@@ -205,8 +205,12 @@ struct rt_handler {
 void rt_push(rt_handler *h);
 void rt_pop(rt_handler *h);
 #define RT_TRY(h) (rt_push(&(h)), rt_setjmp(&(h).jb) != 0)
-#define RT_GUARD_BEGIN { rt_handler __guard; if (!RT_TRY(__guard)) {
-#define RT_GUARD_END rt_pop(&__guard); } else { rt_report_exception(__func__); } }
+// Boundary between the game and mod code: catches both mod (setjmp) and game (C++) exceptions.
+void rt_unwind_to(rt_handler *h);
+void rt_caught_native(const char *where);
+#define RT_GUARD_BEGIN { rt_handler __guard; if (!RT_TRY(__guard)) { try {
+#define RT_GUARD_END } catch (...) { rt_unwind_to(&__guard); rt_caught_native(__func__); } rt_pop(&__guard); } \
+    else { rt_report_exception(__func__); } }
 
 // strings / literals / types
 obj rt_lit(uint32_t idx);

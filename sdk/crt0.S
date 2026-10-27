@@ -12,8 +12,8 @@ __nx_mod0:
     .word __dynamic_start - __nx_mod0
     .word __bss_start - __nx_mod0
     .word __bss_end - __nx_mod0
-    .word 0
-    .word 0
+    .word __eh_frame_hdr_start - __nx_mod0
+    .word __eh_frame_hdr_end - __nx_mod0
     .word __module_object - __nx_mod0
 
 .section ".bss.module_object", "aw", %nobits

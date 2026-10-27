@@ -29,7 +29,7 @@ SECTIONS
     .hash     : { *(.hash) } :rodata
     .gnu.hash : { *(.gnu.hash) } :rodata
     .rela.dyn : { *(.rela.*) } :rodata
-    .eh_frame_hdr : { *(.eh_frame_hdr) } :rodata
+    .eh_frame_hdr : { __eh_frame_hdr_start = .; *(.eh_frame_hdr) __eh_frame_hdr_end = .; } :rodata
     .eh_frame : { KEEP(*(.eh_frame)) } :rodata
 
     . = ALIGN(0x1000);

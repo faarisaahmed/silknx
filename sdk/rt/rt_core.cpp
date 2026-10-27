@@ -370,17 +370,36 @@ static void *resolve_method(obj owner, const char *name, const char *params, con
         if (!m) return nullptr;
         return *(void **)((uint8_t *)m + off::RuntimeConstructorInfo_mhandle);
     }
-    m = rt_call<obj>(Type_GetMethod5, owner, rt_str(name), (int32_t)(4 | 8 | 16 | 32), (obj) nullptr, ptypes,
-                     (obj) nullptr);
-    if (!m && *margs) {
-        // generic method definitions are not found by parameter types; retry by name only
-        m = rt_call<obj>(Type_GetMethod5, owner, rt_str(name), (int32_t)(4 | 8 | 16 | 32), (obj) nullptr,
-                         (obj) nullptr, (obj) nullptr);
+    bool all_known = true;
+    for (int i = 0; i < np; i++)
+        if (!RT_ELEM(ptypes, i, obj)) all_known = false;
+    m = nullptr;
+    if (all_known && !*margs)
+        m = rt_call<obj>(Type_GetMethod5, owner, rt_str(name), (int32_t)(4 | 8 | 16 | 32), (obj) nullptr, ptypes,
+                         (obj) nullptr);
+    int nm = 0;
+    obj gtypes = *margs ? type_array(margs, &nm) : nullptr;
+    if (!m) {
+        // Scan by name / parameter count / generic arity (generic definitions don't match concrete types,
+        // and GetMethod would throw on ambiguity).
+        obj all = rt_call<obj>(RuntimeType_GetMethods, owner, (int32_t)(4 | 8 | 16 | 32));
+        intptr_t n = all ? (intptr_t)((Il2CppArray *)all)->max_length : 0;
+        char want[256];
+        for (intptr_t i = 0; i < n && !m; i++) {
+            obj cand = RT_ELEM(all, i, obj);
+            void *mi = method_handle(cand);
+            if (!mi || strcmp_(*(const char **)((uint8_t *)mi + MI_NAME), name)) continue;
+            if (rt_call<int32_t>(RuntimeMethodInfo_GetParametersCount, cand) != np) continue;
+            bool gdef = rt_call<bool>(RuntimeMethodInfo_get_IsGenericMethodDefinition, cand);
+            if (gdef != (nm > 0)) continue;
+            if (nm && ((Il2CppArray *)rt_call<obj>(RuntimeMethodInfo_GetGenericArguments, cand))->max_length != (uintptr_t)nm)
+                continue;
+            m = cand;
+        }
+        (void)want;
     }
     if (!m) return nullptr;
-    if (*margs) {
-        int nm = 0;
-        obj gtypes = type_array(margs, &nm);
+    if (nm) {
         m = rt_call<obj>(RuntimeMethodInfo_MakeGenericMethod, m, gtypes);
         if (!m) return nullptr;
     }
@@ -516,6 +535,26 @@ void rt_pop(rt_handler *h) {
             p->prev = h->prev;
             return;
         }
+}
+
+void rt_unwind_to(rt_handler *h) {
+    // A C++ exception unwound past setjmp handlers: drop everything above (and including) h.
+    ThreadEH *t = eh();
+    rt_handler *p = t->top;
+    while (p && p != h) p = p->prev;
+    t->top = p ? h->prev : t->top;
+}
+
+extern "C" void *__cxa_current_primary_exception();
+extern "C" void __cxa_decrement_exception_refcount(void *);
+
+void rt_caught_native(const char *where) {
+    // IL2CPP throws Il2CppExceptionWrapper { Il2CppException* ex; }
+    void *p = __cxa_current_primary_exception();
+    obj ex = p ? *(obj *)p : nullptr;
+    if (p) __cxa_decrement_exception_refcount(p);
+    if (g_exc_slot) *g_exc_slot = ex;
+    rt_report_exception(where);
 }
 
 obj rt_exception() { return g_exc_slot ? *g_exc_slot : nullptr; }

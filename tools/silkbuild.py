@@ -248,8 +248,8 @@ def build_module(name, srcs, hooks, include_dirs=(), extra_cflags=(), romfs_dir=
     sdk = os.path.join(ROOT, 'sdk')
     all_srcs = [os.path.join(sdk, f) for f in sdk_sources] + [tramp] + list(srcs)
     cflags = ['--target=aarch64-none-elf', '-march=armv8-a', '-fPIC', '-ffreestanding', '-fno-builtin',
-              '-nostdlib', '-nostdlibinc', '-nostdinc++', '-fno-exceptions', '-fno-rtti', '-fno-stack-protector',
-              '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-fvisibility=hidden', '-O2', '-Wall',
+              '-nostdlib', '-nostdlibinc', '-nostdinc++', '-fexceptions', '-fcxx-exceptions', '-funwind-tables',
+              '-fno-rtti', '-fno-stack-protector', '-fvisibility=hidden', '-O2', '-Wall',
               '-Wno-unused-function', '-ffunction-sections', '-fdata-sections', f'-DSILK_NNMAIN_RVA={nnmain:#x}',
               f'-I{sdk}', f'-I{gen}', *[f'-I{d}' for d in include_dirs], *extra_cflags]
     procs, objs = [], []
@@ -270,7 +270,7 @@ def build_module(name, srcs, hooks, include_dirs=(), extra_cflags=(), romfs_dir=
     if failed:
         raise SystemExit(1)
     elf_path = os.path.join(build, f'{name}.elf')
-    run([platform_paths.lld_path(LLVM) or f'{LLVM}/ld.lld', '-shared', '--hash-style=sysv', '-z', 'norelro', '--no-undefined-version',
+    run([platform_paths.lld_path(LLVM) or f'{LLVM}/ld.lld', '-shared', '--hash-style=sysv', '--eh-frame-hdr', '-z', 'norelro', '--no-undefined-version',
          '-Bsymbolic', '--gc-sections', '-init=silk_module_init', '-T', os.path.join(sdk, 'module.ld'),
          '--allow-shlib-undefined', *[f'--undefined=hook_{h}' for h, _ in hooks], '-o', elf_path, *objs])
     elf = Elf(elf_path)
