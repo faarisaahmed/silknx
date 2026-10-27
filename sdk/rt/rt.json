@@ -416,6 +416,137 @@
       "name": "RuntimeMethodInfo_GetGenericArguments",
       "method": "System.Reflection.RuntimeMethodInfo::GetGenericArguments",
       "argc": 0
+    },
+    {
+      "name": "Behaviour_get_enabled",
+      "method": "UnityEngine.Behaviour::get_enabled"
+    },
+    {
+      "name": "Behaviour_get_isActiveAndEnabled",
+      "method": "UnityEngine.Behaviour::get_isActiveAndEnabled"
+    },
+    {
+      "name": "Object_FindObjectsOfType_Type",
+      "method": "UnityEngine.Object::FindObjectsOfType",
+      "params": [
+        "System.Type"
+      ]
+    },
+    {
+      "name": "Object_FindObjectsByType_Type",
+      "method": "UnityEngine.Object::FindObjectsByType",
+      "params": [
+        "System.Type",
+        "UnityEngine.FindObjectsSortMode"
+      ]
+    },
+    {
+      "name": "HeroController_get_instance",
+      "method": "HeroController::get_instance"
+    },
+    {
+      "name": "HealthManager_Hit",
+      "method": "HealthManager::Hit",
+      "argc": 1
+    },
+    {
+      "name": "GameManager_get_instance",
+      "method": "GameManager::get_instance"
+    },
+    {
+      "name": "GameManager_LoadGameFromUI",
+      "method": "GameManager::LoadGameFromUI",
+      "params": [
+        "int"
+      ]
+    },
+    {
+      "name": "GameManager_ChangeToScene",
+      "method": "GameManager::ChangeToScene",
+      "params": [
+        "string",
+        "string",
+        "float"
+      ]
+    },
+    {
+      "name": "Activator_CreateInstance",
+      "method": "System.Activator::CreateInstance",
+      "params": [
+        "System.Type"
+      ]
+    },
+    {
+      "name": "StringBuilder_Append_string",
+      "method": "System.Text.StringBuilder::Append",
+      "params": [
+        "string"
+      ]
+    },
+    {
+      "name": "RuntimeType_GetField",
+      "method": "System.RuntimeType::GetField",
+      "params": [
+        "string",
+        "System.Reflection.BindingFlags"
+      ]
+    },
+    {
+      "name": "Type_get_Assembly",
+      "method": "System.RuntimeType::get_Assembly"
+    },
+    {
+      "name": "String_ToString",
+      "method": "System.String::ToString",
+      "argc": 0
+    },
+    {
+      "name": "String_Equals_object",
+      "method": "System.String::Equals",
+      "params": [
+        "object"
+      ]
+    },
+    {
+      "name": "Activator_CreateInstance_args",
+      "method": "System.Activator::CreateInstance",
+      "params": [
+        "System.Type",
+        "object[]"
+      ]
+    },
+    {
+      "name": "RuntimeType_GetConstructors",
+      "method": "System.RuntimeType::GetConstructors",
+      "params": [
+        "System.Reflection.BindingFlags"
+      ]
+    },
+    {
+      "name": "RuntimeConstructorInfo_GetParametersCount",
+      "method": "System.Reflection.RuntimeConstructorInfo::GetParametersCount",
+      "argc": 0
+    },
+    {
+      "name": "GUIContent_ctor_text_image_tooltip",
+      "method": "UnityEngine.GUIContent::.ctor",
+      "params": [
+        "string",
+        "UnityEngine.Texture",
+        "string"
+      ]
+    },
+    {
+      "name": "String_Concat_array",
+      "method": "System.String::Concat",
+      "params": [
+        "string[]"
+      ]
+    },
+    {
+      "name": "Object_MemberwiseClone",
+      "method": "System.Object::MemberwiseClone",
+      "argc": 0
     }
   ],
   "fields": [
@@ -454,6 +585,18 @@
     {
       "name": "Delegate_method_code",
       "field": "System.Delegate::method_code"
+    },
+    {
+      "name": "HealthManager_hp",
+      "field": "HealthManager::hp"
+    },
+    {
+      "name": "Exception_message",
+      "field": "System.Exception::_message"
+    },
+    {
+      "name": "Delegate_extra_arg",
+      "field": "System.Delegate::extra_arg"
     }
   ]
 }

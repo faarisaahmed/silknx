@@ -218,8 +218,34 @@ def main():
                               'static_size': static_size, 'generic': gen_cont >= 0, 'interface': bool(flags & 0x20),
                               'parent': type_name(parent) if parent >= 0 else None,
                               'valuetype': bool(bitfield & 1), 'fields': fl, 'methods': ml})
-    json.dump({'code_registration': code_reg, 'metadata_registration': meta_reg, 'types': out_types},
-              open(out, 'w'))
+    # Generic class instantiations present in the build (args by name; reference types collapse to shared code)
+    gc_count, gc_ptr = img.u64(meta_reg + 0), img.u64(meta_reg + 8)
+    instances = set()
+    for k in range(gc_count):
+        g = img.u64(gc_ptr + 8 * k)
+        if not g:
+            continue
+        try:
+            name = il2type_name(g + 0, 0) if False else None
+            base_t = img.u64(g)
+            inst = img.u64(g + 8)
+            base = il2type_name(base_t, 1)
+            args = []
+            if inst:
+                argc, argv = img.u64(inst), img.u64(inst + 8)
+                for a in range(min(argc, 8)):
+                    p = img.u64(argv + 8 * a)
+                    bits = struct.unpack_from('<I', img.img, p + 8)[0]
+                    t = (bits >> 16) & 0xFF
+                    is_ref = t in (0x0E, 0x12, 0x1C, 0x1D, 0x14) or (t == 0x15 and not (bits >> 31) & 1 and
+                                                                       img.u64(img.u64(p)) and
+                                                                       ((struct.unpack_from('<I', img.img, img.u64(img.u64(p)) + 8)[0] >> 16) & 0xFF) == 0x12)
+                    args.append('ref' if is_ref else il2type_name(p, 1))
+            instances.add(base + '|' + ','.join(args))
+        except Exception:
+            continue
+    json.dump({'code_registration': code_reg, 'metadata_registration': meta_reg, 'types': out_types,
+               'generic_instances': sorted(instances)}, open(out, 'w'))
     if '--cs' in sys.argv:
         with open(sys.argv[sys.argv.index('--cs') + 1], 'w') as cs:
             for t in out_types:

@@ -19,5 +19,6 @@ config/*
 # Local test material
 pcmods/
 testplugins*/
+testskin/
 .DS_Store
 switch-sd/

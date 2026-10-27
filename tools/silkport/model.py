@@ -35,7 +35,8 @@ def sig_str(t):
     if k in ('class', 'vt'):
         return t[1]
     if k == 'gi':
-        return f'{t[1].split("`")[0]}<{", ".join(sig_str(a) for a in t[2])}>'
+        import re
+        return f'{re.sub(r"`[0-9]+", "", t[1])}<{", ".join(sig_str(a) for a in t[2])}>'
     if k == 'sz':
         return sig_str(t[1]) + '[]'
     if k == 'md':
@@ -620,6 +621,30 @@ class Universe:
         for a in self.asms:
             if getattr(a, 'kind', None) != 'il2cpp':
                 a.finish()
+        self.add_missing_bcl_structs()
+
+    def add_missing_bcl_structs(self):
+        """System.ValueTuple`1..8 have a fixed layout; define the ones the Switch build stripped."""
+        class SynthAsm:
+            name = 'mscorlib'
+            kind = 'il2cpp'
+            field_offsets = {}
+            typedefs = []
+        for n in range(1, 9):
+            key = f'System.ValueTuple`{n}'
+            if key in self.types:
+                continue
+            td = TypeDef(SynthAsm, -n, 0x100109, f'ValueTuple`{n}', 'System')
+            td.key = key
+            td.il2cpp_vt = True
+            td.il2cpp_enum = False
+            td.extends = ('class', 'System.ValueType')
+            td.gparams = [f'T{k + 1}' for k in range(n)]
+            for k in range(n):
+                f = FieldDef(SynthAsm, -k, 0x6, 'Rest' if k == 7 else f'Item{k + 1}', ('var', k))
+                f.owner = td
+                td.fields.append(f)
+            self.types[key] = td
 
     def pc_method(self, md):
         """The PC copy's version (with IL) of a game method, or None."""

@@ -9,6 +9,11 @@
 using namespace rva;
 
 obj rt_start_coroutine(obj owner, obj enumerator);
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_float_string_G1(obj, obj, obj, float, obj, int32_t, int32_t);
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_obj_string_G1(obj, obj, obj, obj, obj, int32_t, int32_t);
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_bool_string_G1(obj, obj, obj, bool, obj, int32_t, int32_t);
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_int32_t_string_G1(obj, obj, obj, int32_t, obj, int32_t, int32_t);
+float shim_BepInEx_Configuration_ConfigEntry_1_float__get_Value(obj, int32_t);
 void rt_stop_coroutine(obj owner, obj handle_or_enum);
 void rt_stop_all_coroutines(obj owner);
 void rt_set_enabled(obj comp, bool on);
@@ -159,7 +164,7 @@ obj shim_UnityEngine_Component__get_transform(obj self) {
 
 bool shim_UnityEngine_Behaviour__get_enabled(obj self) {
     if (rt_is_mod(self)) return ((ModComponent *)self)->enabled;
-    rt_unsupported("Behaviour.enabled on a game object via shim");
+    return rt_call<bool>(Behaviour_get_enabled, rt_nc(self));
 }
 
 void shim_UnityEngine_Behaviour__set_enabled__bool(obj self, bool on) {
@@ -172,7 +177,7 @@ bool shim_UnityEngine_Behaviour__get_isActiveAndEnabled(obj self) {
         auto *c = (ModComponent *)self;
         return c->enabled && !c->destroyed && rt_call<bool>(GameObject_get_activeInHierarchy, c->go);
     }
-    rt_unsupported("isActiveAndEnabled on a game object via shim");
+    return rt_call<bool>(Behaviour_get_isActiveAndEnabled, rt_nc(self));
 }
 
 obj shim_UnityEngine_Object__get_name(obj self) {
@@ -559,12 +564,169 @@ obj shim_BepInEx_Paths__get_ConfigPath(int32_t) {
 
 obj rt_find_components(const rt_modtype *d);
 
-obj shim_UnityEngine_Object__FindObjectsByType__UnityEngine_FindObjectsSortMode_G1(int32_t, int32_t tref) {
+obj shim_UnityEngine_Object__FindObjectsByType__UnityEngine_FindObjectsSortMode_G1(int32_t mode, int32_t tref) {
     if (silk_typerefs[tref].desc) return rt_find_components(silk_typerefs[tref].desc);
-    rt_unsupported("FindObjectsByType<game type> via shim");
+    return rt_call<obj>(Object_FindObjectsByType_Type, rt_type(tref), mode);
 }
 
 obj shim_UnityEngine_Object__FindObjectsOfType_G1(int32_t tref) {
     if (silk_typerefs[tref].desc) return rt_find_components(silk_typerefs[tref].desc);
-    rt_unsupported("FindObjectsOfType<game type> via shim");
+    return rt_call<obj>(Object_FindObjectsOfType_Type, rt_type(tref));
+}
+
+obj rt_harmony_activate(uint32_t site) {
+    if (site < silk_patch_class_count) silk_patch_classes[site].applied = true;
+    static rt_modtype tok = {"System.Reflection.MethodInfo(SilkNX)", nullptr, sizeof(ModObj) + 8, 0, false,
+                             nullptr, 0, nullptr, false, nullptr, 0, nullptr, {}, nullptr};
+    return rt_new_mod(&tok);
+}
+
+// ======================================================================== HarmonyLib.AccessTools (real reflection)
+
+obj shim_HarmonyLib_AccessTools__Method__System_Type_string_System_TypeArr_System_TypeArr(obj t, obj name,
+                                                                                        obj params, obj generics,
+                                                                                        int32_t) {
+    obj m = rt_find_method(t, name, params);
+    if (m && generics) m = rt_call<obj>(rva::RuntimeMethodInfo_MakeGenericMethod, m, generics);
+    return m;
+}
+
+obj shim_HarmonyLib_AccessTools__Method__System_Type_string_System_TypeArr(obj t, obj name, obj params, int32_t) {
+    return rt_find_method(t, name, params);
+}
+
+obj shim_HarmonyLib_AccessTools__Method__System_Type_string(obj t, obj name, int32_t) {
+    return rt_find_method(t, name, nullptr);
+}
+
+obj shim_HarmonyLib_AccessTools__DeclaredMethod__System_Type_string_System_TypeArr_System_TypeArr(obj t, obj n, obj p,
+                                                                                                obj, int32_t) {
+    return rt_find_method(t, n, p);
+}
+
+static obj prefixed(const char *pre, obj name) {
+    char n[256], full[300];
+    rt_str_to_utf8(name, n, sizeof(n));
+    silk::snfmt(full, sizeof(full), "%s%s", pre, n);
+    return rt_str(full);
+}
+
+obj shim_HarmonyLib_AccessTools__PropertyGetter__System_Type_string(obj t, obj name, int32_t) {
+    return rt_find_method(t, prefixed("get_", name), nullptr);
+}
+
+obj shim_HarmonyLib_AccessTools__PropertySetter__System_Type_string(obj t, obj name, int32_t) {
+    return rt_find_method(t, prefixed("set_", name), nullptr);
+}
+
+obj shim_HarmonyLib_AccessTools__Field__System_Type_string(obj t, obj name, int32_t) {
+    if (!t || rt_is_mod(t)) return nullptr;
+    return rt_call<obj>(rva::RuntimeType_GetField, t, name, (int32_t)(4 | 8 | 16 | 32));
+}
+
+obj shim_HarmonyLib_AccessTools__Constructor__System_Type_System_TypeArr_bool(obj t, obj params, bool, int32_t) {
+    if (!t || rt_is_mod(t)) return nullptr;
+    if (!params) params = rt_call<obj>(rva::Array_CreateInstance,
+                                       rt_call<obj>(rva::Type_GetType, rt_str("System.Type, mscorlib")), (int32_t)0);
+    return rt_call<obj>(rva::Type_GetConstructor4, t, (int32_t)(4 | 8 | 16 | 32), (obj) nullptr, params, (obj) nullptr);
+}
+
+obj shim_HarmonyLib_AccessTools__TypeByName__string(obj name, int32_t) {
+    char n[256], aqn[400];
+    rt_str_to_utf8(name, n, sizeof(n));
+    for (int i = -1; i < 0 || silk_image_names[i]; i++) {
+        if (i < 0) silk::snfmt(aqn, sizeof(aqn), "%s", n);
+        else silk::snfmt(aqn, sizeof(aqn), "%s, %s", n, silk_image_names[i]);
+        obj t = rt_call<obj>(rva::Type_GetType, rt_str(aqn));
+        if (t) return t;
+    }
+    return nullptr;  // mod-defined or unknown types: Harmony also returns null
+}
+
+// HarmonyMethod / Patch objects only matter for patches resolved at build time; keep them inert.
+static obj harmony_token() {
+    static rt_modtype d = {"HarmonyLib.HarmonyMethod", nullptr, sizeof(ModObj) + 8, 0, false, nullptr, 0, nullptr,
+                           false, nullptr, 0, nullptr, {}, nullptr};
+    return rt_new_mod(&d);
+}
+obj shim_HarmonyLib_HarmonyMethod___ctor__System_Type_string_System_TypeArr(obj, obj, obj, int32_t) {
+    return harmony_token();
+}
+obj shim_HarmonyLib_HarmonyMethod___ctor__System_Reflection_MethodInfo(obj, int32_t) { return harmony_token(); }
+obj shim_HarmonyLib_HarmonyMethod___ctor__System_Type_string(obj, obj, int32_t) { return harmony_token(); }
+
+obj shim_HarmonyLib_Harmony__Patch__System_Reflection_MethodBase_HarmonyLib_HarmonyMethod_HarmonyLib_HarmonyMethod_HarmonyLib_HarmonyMethod_HarmonyLib_HarmonyMethod_HarmonyLib_HarmonyMethod(
+    obj, obj, obj, obj, obj, obj, obj, int32_t) {
+    static int warned;
+    if (!warned++) silk::log("Harmony.Patch with a target only known at runtime cannot be applied on Switch");
+    return nullptr;
+}
+
+obj shim_HarmonyLib_Harmony__GetPatchedMethods(obj, int32_t) { return rt_new_string_array(0); }
+
+// ======================================================================== BepInEx extras
+
+obj shim_BepInEx_Logging_Logger__get_Listeners(int32_t) {
+    return rt_new_generic_instance("System.Collections.Generic.List`1[[System.Object, mscorlib]], mscorlib");
+}
+
+obj shim_BepInEx_Bootstrap_Chainloader__get_PluginInfos(int32_t) {
+    return rt_new_generic_instance(
+        "System.Collections.Generic.Dictionary`2[[System.String, mscorlib],[System.Object, mscorlib]], mscorlib");
+}
+
+obj shim_BepInEx_Paths__get_ProcessName(int32_t) { return rt_str("Hollow Knight Silksong"); }
+obj shim_BepInEx_Paths__get_GameRootPath(int32_t) {
+    char sa[300];
+    rt_str_to_utf8(rt_call<obj>(rva::Application_get_streamingAssetsPath), sa, sizeof(sa));
+    char out[400];
+    silk::snfmt(out, sizeof(out), "%s/SilkNX", sa);
+    return rt_str(out);
+}
+obj shim_BepInEx_Paths__get_BepInExRootPath(int32_t a) { return shim_BepInEx_Paths__get_GameRootPath(a); }
+
+obj shim_BepInEx_PluginInfo__get_Metadata(obj, int32_t) { return nullptr; }
+obj shim_BepInEx_BepInPlugin__get_Name(obj, int32_t) { return rt_str(""); }
+
+obj shim_BepInEx_Configuration_ConfigDescription___ctor__string_BepInEx_Configuration_AcceptableValueBase_objectArr(
+    obj, obj, obj, int32_t) {
+    return harmony_token();
+}
+obj shim_BepInEx_Configuration_ConfigDescription___ctor__string(obj, int32_t) { return harmony_token(); }
+obj shim_BepInEx_Configuration_AcceptableValueList_1_obj___ctor__obj(obj, int32_t) { return harmony_token(); }
+
+void shim_BepInEx_Configuration_ConfigEntry_1_obj__add_SettingChanged__System_EventHandler(obj, obj, int32_t) {}
+void shim_BepInEx_Configuration_ConfigEntry_1_float__add_SettingChanged__System_EventHandler(obj, obj, int32_t) {}
+void shim_BepInEx_Configuration_ConfigEntry_1_bool__add_SettingChanged__System_EventHandler(obj, obj, int32_t) {}
+void shim_BepInEx_Configuration_ConfigEntry_1_int32_t__add_SettingChanged__System_EventHandler(obj, obj, int32_t) {}
+void shim_BepInEx_Configuration_ConfigFile__add_SettingChanged__System_EventHandler_BepInEx_Configuration_SettingChangedEventArgs_(obj, obj, int32_t) {}
+
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_double_string_G1(obj self, obj sec, obj key, double def,
+                                                                               obj d, int32_t a, int32_t t) {
+    return shim_BepInEx_Configuration_ConfigFile__Bind__string_string_float_string_G1(self, sec, key, (float)def, d, a, t);
+}
+double shim_BepInEx_Configuration_ConfigEntry_1_double__get_Value(obj e, int32_t a) {
+    return shim_BepInEx_Configuration_ConfigEntry_1_float__get_Value(e, a);
+}
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_obj_BepInEx_Configuration_ConfigDescription_G1(
+    obj self, obj sec, obj key, obj def, obj desc, int32_t a, int32_t t) {
+    return shim_BepInEx_Configuration_ConfigFile__Bind__string_string_obj_string_G1(self, sec, key, def, desc, a, t);
+}
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_bool_BepInEx_Configuration_ConfigDescription_G1(
+    obj self, obj sec, obj key, bool def, obj desc, int32_t a, int32_t t) {
+    return shim_BepInEx_Configuration_ConfigFile__Bind__string_string_bool_string_G1(self, sec, key, def, desc, a, t);
+}
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_float_BepInEx_Configuration_ConfigDescription_G1(
+    obj self, obj sec, obj key, float def, obj desc, int32_t a, int32_t t) {
+    return shim_BepInEx_Configuration_ConfigFile__Bind__string_string_float_string_G1(self, sec, key, def, desc, a, t);
+}
+obj shim_BepInEx_Configuration_ConfigFile__Bind__string_string_int32_t_BepInEx_Configuration_ConfigDescription_G1(
+    obj self, obj sec, obj key, int32_t def, obj desc, int32_t a, int32_t t) {
+    return shim_BepInEx_Configuration_ConfigFile__Bind__string_string_int32_t_string_G1(self, sec, key, def, desc, a, t);
+}
+
+obj shim_System_Type__get_Assembly(obj self) {
+    rt_modtype *d = rt_modtype_of_typeobj(self);
+    if (d) return shim_System_Reflection_Assembly__GetExecutingAssembly(d->asm_index);
+    return rt_call<obj>(rva::Type_get_Assembly, rt_nc(self));
 }

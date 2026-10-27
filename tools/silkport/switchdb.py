@@ -60,6 +60,7 @@ def types_match(dump_t, want):
 class SwitchDB:
     def __init__(self, path=None):
         d = json.load(open(path or os.path.join(ROOT, 'game', 'dump.json')))
+        self.generic_instances = d.get('generic_instances', [])
         self.types = {}
         for t in d['types']:
             self.types.setdefault(t['name'], t)

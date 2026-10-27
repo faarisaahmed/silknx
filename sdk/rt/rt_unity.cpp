@@ -7,6 +7,7 @@ using unity::Rect;
 using unity::Color;
 
 void rt_boot_plugins(obj manager_go);
+void rt_autotest_frame();
 void rt_input_frame();
 
 namespace {
@@ -60,13 +61,21 @@ HostRec *new_host_rec() {
 
 bool go_active(obj go) { return go && rt_call<bool>(GameObject_get_activeInHierarchy, go); }
 
+const char *const kMsgNames[] = {"Awake", "Start", "OnEnable", "OnDisable", "OnDestroy", "Update", "LateUpdate",
+                                 "FixedUpdate", "OnGUI", "OnApplicationQuit"};
+
 void call_msg(obj comp, rt_message m) {
     auto *c = (ModComponent *)comp;
     void *fn = c->desc->messages[m];
     if (!fn) return;
+    char ctx[160];
+    silk::snfmt(ctx, sizeof(ctx), "%s.%s", c->desc->name, kMsgNames[m]);
+    const char *saved = g_rt_context;
+    g_rt_context = ctx;
     RT_GUARD_BEGIN
     ((void (*)(obj, const void *))fn)(comp, nullptr);
     RT_GUARD_END
+    g_rt_context = saved;
 }
 
 // ---------------------------------------------------------------- coroutines
@@ -167,6 +176,11 @@ obj rt_add_component(obj go, const rt_modtype *d) {
     if (go_active(go)) {
         c->awoken = 1;
         call_msg(comp, MSG_Awake);
+#ifdef SILKNX_TRACE
+        silk::log("trace: %s.Awake returned", d->name);
+        ((void (*)(int32_t, const void *))(silk_main_base + 0x4fc4d10))(1, nullptr);  // GC.InternalCollect(1)
+        silk::log("trace: GC survived");
+#endif
         if (c->enabled) call_msg(comp, MSG_OnEnable);
     }
     return comp;
@@ -223,16 +237,19 @@ static void set_enabled(obj comp, bool on) {
 #define OURS(self) (g_creating_host || find_host(self) != nullptr)
 
 SILK_HOOK(SS_Awake, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("SS_Awake");
     if (OURS(self)) return;
     orig_SS_Awake(self, mi);
 }
 
 SILK_HOOK(SS_Start, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("SS_Start");
     if (OURS(self)) return;
     orig_SS_Start(self, mi);
 }
 
 SILK_HOOK(SS_OnEnable, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("SS_OnEnable");
     if (g_creating_host) return;
     HostRec *h = find_host(self);
     if (!h) return orig_SS_OnEnable(self, mi);
@@ -248,6 +265,7 @@ SILK_HOOK(SS_OnEnable, void, obj self, const void *mi) {
 }
 
 SILK_HOOK(SS_OnDisable, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("SS_OnDisable");
     HostRec *h = find_host(self);
     if (!h) return orig_SS_OnDisable(self, mi);
     h->active = 0;
@@ -258,6 +276,7 @@ SILK_HOOK(SS_OnDisable, void, obj self, const void *mi) {
 }
 
 SILK_HOOK(SS_OnDestroy, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("SS_OnDestroy");
     HostRec *h = find_host(self);
     if (!h) return orig_SS_OnDestroy(self, mi);
     while (h->ncomps) destroy_comp(h, h->ncomps - 1);
@@ -265,6 +284,7 @@ SILK_HOOK(SS_OnDestroy, void, obj self, const void *mi) {
 }
 
 SILK_HOOK(SS_Update, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("SS_Update");
     HostRec *h = find_host(self);
     if (!h) return orig_SS_Update(self, mi);
     for (int i = 0; i < h->ncomps; i++) {
@@ -280,6 +300,7 @@ SILK_HOOK(SS_Update, void, obj self, const void *mi) {
 }
 
 SILK_HOOK(SS_FixedUpdate, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("SS_FixedUpdate");
     HostRec *h = find_host(self);
     if (!h) return orig_SS_FixedUpdate(self, mi);
     for (int i = 0; i < h->ncomps; i++) {
@@ -289,14 +310,17 @@ SILK_HOOK(SS_FixedUpdate, void, obj self, const void *mi) {
 }
 
 SILK_HOOK(SS_OnTriggerEnter2D, void, obj self, obj col, const void *mi) {
+    RT_HOOK_TRACE("SS_OnTriggerEnter2D");
     if (OURS(self)) return;
     orig_SS_OnTriggerEnter2D(self, col, mi);
 }
 SILK_HOOK(SS_OnTriggerStay2D, void, obj self, obj col, const void *mi) {
+    RT_HOOK_TRACE("SS_OnTriggerStay2D");
     if (OURS(self)) return;
     orig_SS_OnTriggerStay2D(self, col, mi);
 }
 SILK_HOOK(SS_OnTriggerExit2D, void, obj self, obj col, const void *mi) {
+    RT_HOOK_TRACE("SS_OnTriggerExit2D");
     if (OURS(self)) return;
     orig_SS_OnTriggerExit2D(self, col, mi);
 }
@@ -306,13 +330,16 @@ SILK_HOOK(SS_OnTriggerExit2D, void, obj self, obj col, const void *mi) {
 static void step_coroutines();
 
 SILK_HOOK(UB_Update, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("UB_Update");
     if (g_creating_global) return;
     if (self != g_ub) return orig_UB_Update(self, mi);
     rt_input_frame();
     step_coroutines();
+    rt_autotest_frame();
 }
 
 SILK_HOOK(UB_LateUpdate, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("UB_LateUpdate");
     if (g_creating_global) return;
     if (self != g_ub) return orig_UB_LateUpdate(self, mi);
     for (int i = 0; i < g_nhosts; i++) {
@@ -326,6 +353,7 @@ SILK_HOOK(UB_LateUpdate, void, obj self, const void *mi) {
 }
 
 SILK_HOOK(UB_FixedUpdate, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("UB_FixedUpdate");
     if (g_creating_global || self == g_ub) return;
     orig_UB_FixedUpdate(self, mi);
 }
@@ -333,26 +361,38 @@ SILK_HOOK(UB_FixedUpdate, void, obj self, const void *mi) {
 static void draw_console();
 
 SILK_HOOK(CP_Awake, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("CP_Awake");
     if (g_creating_global || self == g_cp) return;
     orig_CP_Awake(self, mi);
 }
 
 SILK_HOOK(CP_Update, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("CP_Update");
     if (g_creating_global || self == g_cp) return;
     orig_CP_Update(self, mi);
 }
 
 SILK_HOOK(CP_OnGUI, void, obj self, const void *mi) {
+    RT_HOOK_TRACE("CP_OnGUI");
     if (self != g_cp) return orig_CP_OnGUI(self, mi);
     for (int i = 0; i < g_nhosts; i++) {
         HostRec &h = g_hosts[i];
         if (!h.host || !h.active) continue;
         for (int k = 0; k < h.ncomps; k++) {
             auto *c = (ModComponent *)h.comps[k];
+#ifdef SILKNX_SKIP_ONGUI  // debug bisect: skip OnGUI of components whose type name starts with this
+            if (startswith_(c->desc->name, SILKNX_SKIP_ONGUI)) continue;
+#endif
             if (c->enabled && c->awoken && !c->destroyed) call_msg(h.comps[k], MSG_OnGUI);
         }
     }
+#ifdef SILKNX_TRACE_ALL
+    if (g_rt_trace_budget-- > 0) silk::log("trace: OnGUI mods done");
+#endif
     draw_console();
+#ifdef SILKNX_TRACE_ALL
+    if (g_rt_trace_budget-- > 0) silk::log("trace: console done");
+#endif
 }
 
 // ======================================================================== coroutines
@@ -374,6 +414,9 @@ obj rt_start_coroutine(obj owner, obj enumerator) {
         c.stack[0] = enumerator;
         c.depth = 1;
         c.handle = new_handle();
+#ifdef SILKNX_TRACE
+        silk::log("trace: coroutine %d started", i);
+#endif
         return c.handle;
     }
     rt_unsupported("too many coroutines");
@@ -485,6 +528,18 @@ void rt_console(const char *fmt, ...) {
     __builtin_va_start(ap, fmt);
     silk::vsnfmt(buf, sizeof(buf), fmt, ap);
     __builtin_va_end(ap);
+    // Repeats of the most recent message just refresh it with a count.
+    int last = (g_line_head + kLines - 1) % kLines;
+    static int repeat = 1;
+    static char last_raw[160];
+    if (g_lines[last][0] && !strcmp_(last_raw, buf)) {
+        repeat++;
+        silk::snfmt(g_lines[last], sizeof(g_lines[last]), "%s  (x%d)", buf, repeat);
+        g_line_time[last] = g_now + 8.0f;
+        return;
+    }
+    repeat = 1;
+    memcpy(last_raw, buf, sizeof(buf));
     memcpy(g_lines[g_line_head], buf, sizeof(buf));
     g_line_time[g_line_head] = g_now + 8.0f;
     g_line_head = (g_line_head + 1) % kLines;
@@ -525,7 +580,11 @@ static obj new_gameobject(const char *name) {
     return go;
 }
 
+#ifdef SILKNX_SELFTEST
+void rt_selftest_gc();
+#endif
 SILK_HOOK(RT_Boot, void, const void *mi) {
+    RT_HOOK_TRACE("RT_Boot");
     orig_RT_Boot(mi);
     if (rt_ready()) return;
     rt_boot_core();
@@ -539,6 +598,7 @@ SILK_HOOK(RT_Boot, void, const void *mi) {
     RT_GUARD_BEGIN
     rt_call<int32_t>(Int32_Parse, rt_str("still not a number"));
     RT_GUARD_END
+    rt_selftest_gc();
 #endif
     g_hosts = (HostRec *)rt_root_alloc(sizeof(HostRec) * kMaxHosts);
     g_co = (Coroutine *)rt_root_alloc(sizeof(Coroutine) * kMaxCoroutines);
@@ -554,6 +614,9 @@ SILK_HOOK(RT_Boot, void, const void *mi) {
     silk::log("SilkNX runtime ready (manager=%p ub=%p cp=%p)", g_manager_go, g_ub, g_cp);
     rt_console("SilkNX: loading %u mod(s)", silk_plugin_count);
     rt_boot_plugins(g_manager_go);
+#ifdef SILKNX_TRACE
+    silk::log("trace: boot done");
+#endif
 }
 
 void silk_main() { silk::log("SilkNX module loaded; waiting for the game to boot"); }
@@ -574,4 +637,16 @@ obj rt_find_components(const rt_modtype *d) {
             if (rt_is_mod_type(g_hosts[i].comps[k], d) && !((ModComponent *)g_hosts[i].comps[k])->destroyed)
                 RT_ELEM(arr, j++, obj) = g_hosts[i].comps[k];
     return arr;
+}
+
+// GUIContent(string text, string tooltip) was stripped from the Switch build; the 3-argument one remains.
+obj shim_UnityEngine_GUIContent___ctor__string_string(obj text, obj tooltip) {
+    static obj type;
+    if (!type) {
+        type = type_by_name("UnityEngine.GUIContent, UnityEngine.IMGUIModule");
+        *(obj *)rt_root_alloc(8) = type;
+    }
+    obj c = rt_call<obj>(FormatterServices_GetUninitializedObject, type);
+    rt_call<void>(GUIContent_ctor_text_image_tooltip, c, text, (obj) nullptr, tooltip);
+    return c;
 }

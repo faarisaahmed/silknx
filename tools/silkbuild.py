@@ -15,6 +15,7 @@ Sources: <mod_dir>/src/*.cpp. Output: out/<name>/exefs/{subsdk9, <build-id>.ips}
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -249,7 +250,7 @@ def build_module(name, srcs, hooks, include_dirs=(), extra_cflags=(), romfs_dir=
     all_srcs = [os.path.join(sdk, f) for f in sdk_sources] + [tramp] + list(srcs)
     cflags = ['--target=aarch64-none-elf', '-march=armv8-a', '-fPIC', '-ffreestanding', '-fno-builtin',
               '-nostdlib', '-nostdlibinc', '-nostdinc++', '-fexceptions', '-fcxx-exceptions', '-funwind-tables',
-              '-fno-rtti', '-fno-stack-protector', '-fvisibility=hidden', '-O2', '-Wall',
+              '-fno-rtti', '-fno-stack-protector', '-fvisibility=hidden', '-gline-tables-only', '-O2', '-Wall',
               '-Wno-unused-function', '-ffunction-sections', '-fdata-sections', f'-DSILK_NNMAIN_RVA={nnmain:#x}',
               f'-I{sdk}', f'-I{gen}', *[f'-I{d}' for d in include_dirs], *extra_cflags]
     procs, objs = [], []
@@ -284,7 +285,10 @@ def build_module(name, srcs, hooks, include_dirs=(), extra_cflags=(), romfs_dir=
     elf2nso(elf, os.path.join(exefs, 'subsdk9'), build_id)
 
     ips = bytearray(b'IPS32')
+    skip = os.environ.get('SILKNX_SKIPHOOKS')  # debug: regex of hook names to leave unpatched
     for hname, rva in hooks:
+        if skip and re.search(skip, hname):
+            continue
         target = module_offset + syms[f'hook_{hname}']
         if sizes[hname] == 1:
             delta = (target - rva) >> 2

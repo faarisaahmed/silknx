@@ -11,6 +11,11 @@ namespace {
 bool g_ready;
 obj g_objarr_type;     // typeof(object)
 void *g_objarr_klass;  // klass of object[]
+// Converted objects (and other raw storage) are allocated as object[] so the GC traces every slot, then
+// re-tagged with long[]'s class: Unity's asset liveness scan (Resources.UnloadUnusedAssets) walks object[]
+// elements as objects and would dereference our raw data, but it skips arrays without references. The GC
+// keeps tracing by allocation kind, not by the current class (verified by rt_selftest_gc).
+void *g_mod_klass;
 void *g_string_klass;
 obj g_type_type;       // typeof(System.Type)
 
@@ -19,6 +24,20 @@ uint32_t MI_KLASS = 0x20;
 uint32_t MI_NAME = 0x18;
 uint32_t KLASS_STATIC_FIELDS = 0xB8;
 uint32_t KLASS_NAME = 0x10;
+uint32_t KLASS_IFACE_OFFSETS = 0xB0;  // Il2CppRuntimeInterfaceOffsetPair*
+uint32_t KLASS_VTABLE = 0;            // calibrated: start of VirtualInvokeData vtable[]
+uint32_t KLASS_IOC = 0;               // calibrated: uint16 interface_offsets_count
+bool g_vtable_ok;
+
+struct VirtualInvokeData {
+    void *fp;
+    const void *mi;
+};
+struct IfacePair {
+    void *iface;
+    int32_t offset;
+    int32_t _pad;
+};
 
 // ---------------------------------------------------------------- rooted heap
 struct RootChunk {
@@ -32,8 +51,14 @@ obj new_object_array(intptr_t n) {
     return rt_call<obj>(Array_CreateInstance, g_objarr_type, (int32_t)n);
 }
 
+obj raw_storage(intptr_t slots) {
+    obj arr = new_object_array(slots);
+    arr->klass = (decltype(arr->klass))g_mod_klass;
+    return arr;
+}
+
 void add_root_chunk(size_t slots) {
-    obj arr = new_object_array((intptr_t)slots);
+    obj arr = raw_storage((intptr_t)slots);
     rt_call<intptr_t>(GCHandle_Alloc, arr);  // pinned forever
     g_roots[g_nroots++] = {(uint8_t *)arr + 0x20, 0, slots * 8};
 }
@@ -87,9 +112,11 @@ bool in_module(const void *p) {
 
 // ======================================================================== core
 
-void *g_rt_objarr_klass;
+void *g_rt_objarr_klass;  // == g_mod_klass (inline checks in rt.h)
 
 bool rt_ready() { return g_ready; }
+
+obj rt_new_raw_storage(intptr_t slots) { return raw_storage(slots); }
 
 void *rt_root_alloc(size_t bytes) {
     bytes = (bytes + 7) & ~(size_t)7;
@@ -225,16 +252,28 @@ void *rt_game_statics(int32_t tref) {
 
 obj rt_new_obj(int32_t tref) {
     obj t = rt_type(tref);
-    if (!t) rt_unsupported(silk_typerefs[tref].aqn ? silk_typerefs[tref].aqn : "new of unknown type");
+    if (!t) rt_unsupported(silk_typerefs[tref].aqn ? silk_typerefs[tref].aqn : silk_typerefs[tref].name);
     return rt_call<obj>(FormatterServices_GetUninitializedObject, t);
 }
 
 obj rt_new_mod(const rt_modtype *d) {
     size_t total = d->is_vt ? sizeof(ModObj) + d->size : d->size;
     intptr_t slots = (intptr_t)((total - 0x20 + 7) / 8);
-    obj o = new_object_array(slots);
+    obj o = rt_new_raw_storage(slots);
     ((ModObj *)o)->desc = d;
     return o;
+}
+
+// Converted objects must be cloned as GC-traced raw storage; the game's own clone would copy them as a real
+// long[] (untraced memory) and lose every reference inside.
+obj shim_System_Object__MemberwiseClone(obj self) {
+    rt_nc(self);
+    if (self->klass != g_mod_klass) return rt_call<obj>(Object_MemberwiseClone, self);
+    intptr_t n = (intptr_t)((Il2CppArray *)self)->max_length;
+    obj c = rt_new_raw_storage(n);
+    ((Il2CppArray *)c)->bounds = ((Il2CppArray *)self)->bounds;
+    memcpy((uint8_t *)c + 0x20, (uint8_t *)self + 0x20, (size_t)n * 8);
+    return c;
 }
 
 obj rt_box(int32_t tref, const void *data, size_t size) {
@@ -254,7 +293,7 @@ void *rt_unbox(obj o) { return (uint8_t *)rt_nc(o) + 0x10; }
 void *rt_unbox_mod(obj o) { return (uint8_t *)rt_nc(o) + sizeof(ModObj); }
 
 bool rt_is_mod(obj o) {
-    if (!o || o->klass != g_objarr_klass) return false;
+    if (!o || o->klass != g_mod_klass) return false;
     auto *m = (ModObj *)o;
     return m->max_length >= 1 && in_module(m->desc);
 }
@@ -308,7 +347,16 @@ void *rt_mstatics(rt_modtype *d) {
     if (!d->statics) d->statics = rt_root_alloc(d->statics_size ? d->statics_size : 8);
     if (!d->cctor_done) {
         d->cctor_done = true;
-        if (d->cctor) ((void (*)(const void *))d->cctor)(nullptr);
+        if (d->cctor) {
+            const char *saved = g_rt_context;
+            char ctx[200];
+            silk::snfmt(ctx, sizeof(ctx), "static constructor of %s", d->name);
+            g_rt_context = ctx;
+            RT_GUARD_BEGIN
+            ((void (*)(const void *))d->cctor)(nullptr);
+            RT_GUARD_END
+            g_rt_context = saved;
+        }
     }
     return d->statics;
 }
@@ -317,9 +365,16 @@ void *rt_mstatics(rt_modtype *d) {
 
 obj rt_new_array(int32_t tref, intptr_t n, size_t elem_size) {
     if (n < 0) rt_unsupported("negative array size");
-    if (tref & 0x40000000) rt_unsupported("arrays of mod-defined structs");
+    if (tref & 0x40000000) {
+        // Arrays of mod-defined structs: an object[] big enough for the raw elements (scanned by the GC),
+        // with the element count tagged into the unused `bounds` field.
+        size_t size = tref & 0xFFFFFF;
+        obj a = rt_new_raw_storage((intptr_t)((n * size + 7) / 8 + 1));
+        ((Il2CppArray *)a)->bounds = (void *)(((uintptr_t)n << 16) | 1);
+        return a;
+    }
     obj t = rt_type(tref);
-    if (!t) rt_unsupported("array of unknown element type");
+    if (!t) rt_unsupported(silk_typerefs[tref].name ? silk_typerefs[tref].name : "array of unknown element type");
     return rt_call<obj>(Array_CreateInstance, t, (int32_t)n);
 }
 
@@ -364,27 +419,38 @@ static void split_desc(const char *desc, char parts[5][1024]) {
 static void *resolve_method(obj owner, const char *name, const char *params, const char *margs, bool ctor) {
     int np = 0;
     obj ptypes = type_array(params, &np);
-    obj m;
-    if (ctor) {
-        m = rt_call<obj>(Type_GetConstructor4, owner, (int32_t)(4 | 16 | 32), (obj) nullptr, ptypes, (obj) nullptr);
-        if (!m) return nullptr;
-        return *(void **)((uint8_t *)m + off::RuntimeConstructorInfo_mhandle);
-    }
     bool all_known = true;
     for (int i = 0; i < np; i++)
         if (!RT_ELEM(ptypes, i, obj)) all_known = false;
-    m = nullptr;
+    const int32_t flags = 4 | 8 | 16 | 32;
+    if (ctor) {
+        const int32_t cflags = 4 | 16 | 32;  // instance only: Static would also match .cctor
+        obj m = all_known ? rt_call<obj>(Type_GetConstructor4, owner, cflags, (obj) nullptr, ptypes, (obj) nullptr) : nullptr;
+        if (!m) {  // a parameter type has no name on Switch: pick by parameter count (never guess blindly)
+            obj all = rt_call<obj>(RuntimeType_GetConstructors, owner, cflags);
+            intptr_t n = all ? (intptr_t)((Il2CppArray *)all)->max_length : 0;
+            int hits = 0;
+            for (intptr_t i = 0; i < n; i++) {
+                obj c = RT_ELEM(all, i, obj);
+                if (rt_call<int32_t>(RuntimeConstructorInfo_GetParametersCount, c) == np) {
+                    if (!hits++) m = c;
+                }
+            }
+            if (hits > 1) silk::log("note: %d constructors with %d parameters; using the first", hits, np);
+        }
+        if (!m || rt_call<int32_t>(RuntimeConstructorInfo_GetParametersCount, m) != np) return nullptr;
+        return *(void **)((uint8_t *)m + off::RuntimeConstructorInfo_mhandle);
+    }
+    obj m = nullptr;
     if (all_known && !*margs)
-        m = rt_call<obj>(Type_GetMethod5, owner, rt_str(name), (int32_t)(4 | 8 | 16 | 32), (obj) nullptr, ptypes,
-                         (obj) nullptr);
+        m = rt_call<obj>(Type_GetMethod5, owner, rt_str(name), flags, (obj) nullptr, ptypes, (obj) nullptr);
     int nm = 0;
     obj gtypes = *margs ? type_array(margs, &nm) : nullptr;
     if (!m) {
         // Scan by name / parameter count / generic arity (generic definitions don't match concrete types,
         // and GetMethod would throw on ambiguity).
-        obj all = rt_call<obj>(RuntimeType_GetMethods, owner, (int32_t)(4 | 8 | 16 | 32));
+        obj all = rt_call<obj>(RuntimeType_GetMethods, owner, flags);
         intptr_t n = all ? (intptr_t)((Il2CppArray *)all)->max_length : 0;
-        char want[256];
         for (intptr_t i = 0; i < n && !m; i++) {
             obj cand = RT_ELEM(all, i, obj);
             void *mi = method_handle(cand);
@@ -396,9 +462,9 @@ static void *resolve_method(obj owner, const char *name, const char *params, con
                 continue;
             m = cand;
         }
-        (void)want;
     }
     if (!m) return nullptr;
+    if (rt_call<int32_t>(RuntimeMethodInfo_GetParametersCount, m) != np) return nullptr;
     if (nm) {
         m = rt_call<obj>(RuntimeMethodInfo_MakeGenericMethod, m, gtypes);
         if (!m) return nullptr;
@@ -406,8 +472,14 @@ static void *resolve_method(obj owner, const char *name, const char *params, con
     return method_handle(m);
 }
 
+const char *g_rt_last_site;  // most recently resolved reflection site, printed with null-reference reports
+
 rt_rsite *rt_site_resolve(rt_rsite *s) {
+    g_rt_last_site = s->desc;
     if (s->fp) return s;
+#ifdef SILKNX_TRACE
+    silk::log("trace-site: %s", s->desc);
+#endif
     char parts[5][1024];
     split_desc(s->desc, parts);
     obj owner = get_type(parts[0]);
@@ -418,14 +490,40 @@ rt_rsite *rt_site_resolve(rt_rsite *s) {
     }
     s->mi = mi;
     s->fp = *(void **)mi;
+#ifdef SILKNX_TRACE
+    silk::log("trace-site: -> fp=main+%lx", (uint64_t)((uintptr_t)s->fp - silk_main_base));
+#endif
     return s;
 }
 
 static rt_vsite g_tostring_site = {0, 3, -1, false, "ToString", "System.Object, mscorlib|ToString|||i",
                                    nullptr, nullptr, nullptr};
 
+// Native IL2CPP dispatch through the vtable / interface offset table (exact, handles explicit implementations).
+static const VirtualInvokeData *vtable_entry(void *klass, rt_vsite *site) {
+    if (!g_vtable_ok || site->slot < 0) return nullptr;
+    int32_t slot = site->slot;
+    if (site->iface) {
+        void *ik = site->tref >= 0 ? rt_klass(site->tref) : nullptr;
+        if (!ik) return nullptr;
+        auto *pairs = *(IfacePair **)((uint8_t *)klass + KLASS_IFACE_OFFSETS);
+        uint16_t n = *(uint16_t *)((uint8_t *)klass + KLASS_IOC);
+        int32_t base = -1;
+        for (uint16_t i = 0; i < n && pairs; i++)
+            if (pairs[i].iface == ik) {
+                base = pairs[i].offset;
+                break;
+            }
+        if (base < 0) return nullptr;
+        slot += base;
+    }
+    auto *vt = (const VirtualInvokeData *)((uint8_t *)klass + KLASS_VTABLE);
+    return vt[slot].fp ? &vt[slot] : nullptr;
+}
+
 void *rt_vfn(obj o, rt_vsite *site) {
     rt_nc(o);
+    g_rt_last_site = site->desc;
     if (rt_is_mod(o)) {
         const rt_modtype *d = ((ModObj *)o)->desc;
         for (uint32_t i = 0; i < d->nvmap; i++)
@@ -444,6 +542,15 @@ void *rt_vfn(obj o, rt_vsite *site) {
     }
     char parts[5][1024];
     split_desc(site->desc, parts);
+    if (!parts[3][0]) {  // not a generic method: use the class's own dispatch tables
+        if (const VirtualInvokeData *v = vtable_entry(o->klass, site)) {
+            e = {o->klass, site, v->fp, v->mi};
+            site->klass = o->klass;
+            site->fp = v->fp;
+            site->mi = v->mi;
+            return v->fp;
+        }
+    }
     obj rtype = rt_call<obj>(Object_GetType, o);
     void *mi = resolve_method(rtype, site->name, parts[2], parts[3], false);
     if (!mi && site->iface && parts[0][0]) {
@@ -480,14 +587,94 @@ void *rt_mod_vfn(obj o, uint32_t mid, void *fallback) {
 
 // ---------------------------------------------------------------- delegates
 
+// IL2CPP delegates keep a signature-specific multicast invoker in extra_arg, and Delegate.Combine installs
+// it as the combined delegate's invoke_impl (it walks the `delegates` array). Left at 0, firing an event
+// with two or more listeners jumps to address 0. Each delegate type's generated constructor stores it as a
+// constant (`adrp x8, F; add x8, x8, :lo12:F; str/stp x8, .., [x0, #0x38]`), so read it from that code.
+static void *ctor_extra_arg_constant(const uint32_t *code) {
+    uint64_t x8 = 0;
+    bool have = false;
+    for (int i = 0; i < 48; i++) {
+        uint32_t in = code[i];
+        uint64_t pc = (uint64_t)(code + i);
+        if ((in & 0x9F00001F) == 0x90000008) {  // adrp x8, page
+            int64_t imm = (int64_t)((((in >> 5) & 0x7FFFF) << 2) | ((in >> 29) & 3));
+            imm = (imm << 43) >> 43;  // sign-extend 21 bits
+            x8 = (pc & ~0xFFFull) + (uint64_t)(imm << 12);
+            have = true;
+        } else if ((in & 0xFFC003FF) == 0x91000108 && have) {  // add x8, x8, #imm12
+            x8 += (in >> 10) & 0xFFF;
+        } else if (have && (in == 0xF9001C08 ||                // str x8, [x0, #0x38]
+                            (in & 0xFFFF83FF) == 0xA9038008)) {  // stp x8, xN, [x0, #0x38]
+            return (void *)x8;
+        } else if (in == 0xD65F03C0) {  // ret
+            have = false;
+        }
+    }
+    return nullptr;
+}
+
+static void *delegate_multicast_invoker(int32_t tref) {
+    static void **cache;
+    if (!cache) cache = (void **)rt_root_alloc(8 * (silk_typeref_count + 1));
+    if (cache[tref]) return cache[tref];
+    void *result = nullptr;
+    obj type = rt_type(tref);
+    obj ctors = type ? rt_call<obj>(RuntimeType_GetConstructors, type, (int32_t)(4 | 16 | 32)) : nullptr;
+    intptr_t n = ctors ? (intptr_t)((Il2CppArray *)ctors)->max_length : 0;
+    for (intptr_t i = 0; i < n && !result; i++) {
+        obj c = RT_ELEM(ctors, i, obj);
+        if (rt_call<int32_t>(RuntimeConstructorInfo_GetParametersCount, c) != 2) continue;
+        void *mi = *(void **)((uint8_t *)c + off::RuntimeConstructorInfo_mhandle);
+        const uint32_t *code = mi ? *(const uint32_t **)mi : nullptr;
+        if (code) result = ctor_extra_arg_constant(code);
+    }
+    if (!result) silk::log("warning: no multicast invoker for delegate type %s", silk_typerefs[tref].name);
+#ifdef SILKNX_TRACE
+    silk::log("trace: multicast invoker for %s = main+%lx", silk_typerefs[tref].name,
+              (uint64_t)((uintptr_t)result - silk_main_base));
+#endif
+    cache[tref] = result;
+    return result;
+}
+
+// A MethodInfo for a converted function, so `Delegate.method` is never null: Combine/Remove/Equals and
+// Delegate.Method all read it, and a combined delegate is a clone of its first element. Cloned from the
+// delegate type's Invoke (same signature, so reflection and DynamicInvoke see a consistent method), then
+// pointed at our function and marked as a plain instance method. One per function, so `-=` still matches.
+static void *delegate_method_info(int32_t tref, void *fn) {
+    constexpr int kSlots = 4096, kSize = 0x58;
+    static void *keys[kSlots];
+    static uint8_t *pool;
+    if (!pool) pool = (uint8_t *)rt_root_alloc(kSlots * kSize);  // never freed; holds no GC references
+    uint32_t h = (uint32_t)(((uintptr_t)fn >> 2) * 2654435761u) % kSlots;
+    for (int n = 0; n < kSlots; n++, h = (h + 1) % kSlots) {
+        if (keys[h] == fn) return pool + h * kSize;
+        if (keys[h]) continue;
+        obj inv = rt_find_method(rt_type(tref), rt_str("Invoke"), nullptr);
+        void *src = inv ? method_handle(inv) : nullptr;
+        if (!src) return nullptr;
+        uint8_t *mi = pool + h * kSize;
+        memcpy(mi, src, kSize);
+        *(void **)(mi + 0x00) = fn;                // methodPointer
+        *(void **)(mi + 0x08) = fn;                // virtualMethodPointer
+        *(uint16_t *)(mi + 0x4c) = 0x0086;         // flags: public hidebysig (instance, not virtual)
+        *(uint16_t *)(mi + 0x50) = 0xFFFF;         // slot: none
+        keys[h] = fn;
+        return mi;
+    }
+    return nullptr;
+}
+
 obj rt_new_delegate(int32_t tref, void *fn, obj target, bool is_static) {
     obj d = rt_new_obj(tref);
     uint8_t *p = (uint8_t *)d;
+    *(void **)(p + off::Delegate_extra_arg) = delegate_multicast_invoker(tref);
     *(void **)(p + off::Delegate_method_ptr) = fn;
     *(void **)(p + off::Delegate_invoke_impl) = fn;
     *(obj *)(p + off::Delegate_m_target) = target;
     *(obj *)(p + off::Delegate_method_code) = is_static ? d : target;
-    *(void **)(p + off::Delegate_method) = nullptr;
+    *(void **)(p + off::Delegate_method) = delegate_method_info(tref, fn);
     return d;
 }
 
@@ -506,6 +693,8 @@ void *rt_delegate_fn(obj d) {
     return *(void **)((uint8_t *)d + off::Delegate_invoke_impl);
 }
 
+obj rt_delegate_bound_target(obj d) { return *(obj *)((uint8_t *)d + off::Delegate_m_target); }
+
 obj rt_delegate_target(obj d) {
     if (rt_is_mod(d)) return ((ModDelegate *)d)->target;
     return *(obj *)((uint8_t *)d + off::Delegate_method_code);
@@ -518,31 +707,39 @@ const void *rt_delegate_mi(obj d) {
 
 // ---------------------------------------------------------------- exceptions
 
+rt_handler *rt_eh_top() { return eh()->top; }
+
 void rt_push(rt_handler *h) {
     ThreadEH *t = eh();
+#ifdef SILKNX_TRACE
+    h->pushed_by = (uintptr_t)__builtin_return_address(0) - (uintptr_t)__module_start;
+#endif
     h->prev = t->top;
     t->top = h;
 }
 
 void rt_pop(rt_handler *h) {
+    // Handlers nest with the stack, so everything above h belongs to frames that already returned
+    // (a leaked handler). Never walk those: their memory is dead stack. Just drop them.
     ThreadEH *t = eh();
-    if (t->top == h) {
-        t->top = h->prev;
-        return;
-    }
-    for (rt_handler *p = t->top; p; p = p->prev)
-        if (p->prev == h) {
-            p->prev = h->prev;
-            return;
+    if (t->top != h) {
+        static int warned;
+        if (warned++ < 8) {
+#ifdef SILKNX_TRACE
+            silk::log("internal: stale exception handler dropped (%s), leaked by module+%lx",
+                      g_rt_context ? g_rt_context : "?", (uint64_t)t->top->pushed_by);
+#else
+            silk::log("internal: stale exception handler dropped (%s)", g_rt_context ? g_rt_context : "?");
+#endif
         }
+    }
+    t->top = h->prev;
 }
 
 void rt_unwind_to(rt_handler *h) {
     // A C++ exception unwound past setjmp handlers: drop everything above (and including) h.
     ThreadEH *t = eh();
-    rt_handler *p = t->top;
-    while (p && p != h) p = p->prev;
-    t->top = p ? h->prev : t->top;
+    t->top = h->prev;
 }
 
 extern "C" void *__cxa_current_primary_exception();
@@ -554,6 +751,7 @@ void rt_caught_native(const char *where) {
     obj ex = p ? *(obj *)p : nullptr;
     if (p) __cxa_decrement_exception_refcount(p);
     if (g_exc_slot) *g_exc_slot = ex;
+    if (g_rt_last_site) silk::log("  (last resolved call: %s)", g_rt_last_site);
     rt_report_exception(where);
 }
 
@@ -574,7 +772,10 @@ static void describe_exception(obj ex, char *buf, int cap) {
     }
     const char *ns = *(const char **)((uint8_t *)ex->klass + KLASS_NAME + 8);
     const char *name = *(const char **)((uint8_t *)ex->klass + KLASS_NAME);
-    silk::snfmt(buf, cap, "%s.%s", ns, name);
+    char msg[200] = "";
+    obj m = *(obj *)((uint8_t *)ex + off::Exception_message);
+    if (m) rt_str_to_utf8(m, msg, sizeof(msg));
+    silk::snfmt(buf, cap, "%s.%s%s%s", ns, name, msg[0] ? ": " : "", msg);
 }
 
 void rt_throw(obj ex) {
@@ -598,7 +799,16 @@ static obj make_exception(const char *aqn) {
     return t ? rt_call<obj>(FormatterServices_GetUninitializedObject, t) : nullptr;
 }
 
-void rt_throw_nre() { rt_throw(make_exception("System.NullReferenceException, mscorlib")); }
+void rt_throw_nre() {
+    // Record where in the converted code the null was hit (symbolize with: silknx.py where <offset>).
+    uintptr_t at = (uintptr_t)__builtin_return_address(0) - 4 - (uintptr_t)__module_start;
+    static uintptr_t last;
+    if (at != last) {
+        last = at;
+        silk::log("null reference at module+%lx (%s)", (uint64_t)at, g_rt_context ? g_rt_context : "?");
+    }
+    rt_throw(make_exception("System.NullReferenceException, mscorlib"));
+}
 
 void rt_throw_cast(obj) { rt_throw(make_exception("System.InvalidCastException, mscorlib")); }
 
@@ -618,14 +828,27 @@ void rt_unsupported(const char *what) {
     rt_throw(make_exception("System.NotSupportedException, mscorlib"));
 }
 
+const char *g_rt_context;  // what mod code is running (for error messages)
+#ifdef SILKNX_TRACE_ALL
+int g_rt_trace_budget = 3000000;
+#endif
+
 void rt_report_exception(const char *where) {
-    char d[300];
+    char d[400];
     describe_exception(rt_exception(), d, sizeof(d));
-    silk::log("exception in %s: %s", where, d);
-    rt_console("exception in %s: %s", where, d);
+    const char *ctx = g_rt_context ? g_rt_context : where;
+    silk::log("exception in %s: %s", ctx, d);
+    rt_console("error in %s: %s", ctx, d);
 }
 
 // ---------------------------------------------------------------- logging helpers
+
+void *rt_string_klass() { return g_string_klass; }
+
+obj rt_object_to_string(obj o) {
+    rt_nc(o);
+    return ((obj(*)(obj, const void *))rt_vfn(o, &g_tostring_site))(o, g_tostring_site.mi);
+}
 
 void rt_log_obj(const char *prefix, obj msg) {
     char buf[600];
@@ -668,6 +891,31 @@ static bool calibrate() {
     obj empty = sf ? *(obj *)sf : nullptr;
     silk::log("calibrate: static_fields=%p String.Empty=%p", sf, empty);
     if (!empty || empty->klass != g_string_klass || ((Il2CppString *)empty)->length != 0) return false;
+    // vtable: String overrides ToString (slot 3) and Equals(object) (slot 0)
+    uintptr_t to_string = silk_main_base + String_ToString, equals = silk_main_base + String_Equals_object;
+    for (uint32_t off = 0x100; off < 0x200; off += 8) {
+        if (*(uintptr_t *)((uint8_t *)klass + off) == to_string &&
+            *(uintptr_t *)((uint8_t *)klass + off - 3 * 16) == equals) {
+            KLASS_VTABLE = off - 3 * 16;
+            break;
+        }
+    }
+    // counts: method_count, property_count, field_count, event_count, nested, vtable, interfaces, interface_offsets
+    for (uint32_t off = KLASS_VTABLE - 0x30; KLASS_VTABLE && off < KLASS_VTABLE; off += 2)
+        if (*(uint16_t *)((uint8_t *)klass + off) == String_method_count) {
+            KLASS_IOC = off + 14;
+            break;
+        }
+    uint16_t n = KLASS_IOC ? *(uint16_t *)((uint8_t *)klass + KLASS_IOC) : 0;
+    auto *pairs = *(IfacePair **)((uint8_t *)klass + KLASS_IFACE_OFFSETS);
+    bool sane = KLASS_VTABLE && n > 0 && n < 64 && pairs;
+    for (uint16_t i = 0; sane && i < n; i++) {
+        const char *nm = pairs[i].iface ? *(const char **)((uint8_t *)pairs[i].iface + KLASS_NAME) : nullptr;
+        if (!nm || nm[0] != 'I') sane = false;  // interface names all start with I
+    }
+    g_vtable_ok = sane;
+    silk::log("calibrate: vtable=+%x iface_count=+%x (%u interfaces) %s", KLASS_VTABLE, KLASS_IOC, n,
+              sane ? "ok" : "FAILED (falling back to reflection)");
     return true;
 }
 
@@ -678,7 +926,9 @@ void rt_boot_core() {
     g_type_type = rt_call<obj>(Type_GetType, rt_str("System.Type, mscorlib"));
     obj probe = new_object_array(1);
     g_objarr_klass = probe->klass;
-    g_rt_objarr_klass = g_objarr_klass;
+    g_mod_klass = rt_call<obj>(Array_CreateInstance, rt_call<obj>(Type_GetType, rt_str("System.Int64, mscorlib")),
+                               (int32_t)1)->klass;
+    g_rt_objarr_klass = g_mod_klass;
     add_root_chunk(65536);
     g_exc_slot = (obj *)rt_root_alloc(8);
     g_lit_cache = (obj *)rt_root_alloc(8 * (silk_literal_count + 1));
@@ -698,3 +948,86 @@ bool startswith_(const char *s, const char *pre) {
         if (*s++ != *pre++) return false;
     return true;
 }
+
+// Managed MethodInfo for (type, name[, parameter types]) using real reflection; never throws on ambiguity.
+obj rt_find_method(obj type, obj name, obj param_types) {
+    if (!type || rt_is_mod(type)) return nullptr;
+    char n[256];
+    rt_str_to_utf8(name, n, sizeof(n));
+    bool all_known = param_types != nullptr;
+    intptr_t np = param_types ? (intptr_t)((Il2CppArray *)param_types)->max_length : -1;
+    for (intptr_t i = 0; i < np; i++)
+        if (!RT_ELEM(param_types, i, obj)) all_known = false;
+    if (all_known)
+        return rt_call<obj>(Type_GetMethod5, type, name, (int32_t)(4 | 8 | 16 | 32), (obj) nullptr, param_types,
+                            (obj) nullptr);
+    obj all = rt_call<obj>(RuntimeType_GetMethods, type, (int32_t)(4 | 8 | 16 | 32));
+    intptr_t cnt = all ? (intptr_t)((Il2CppArray *)all)->max_length : 0;
+    for (intptr_t i = 0; i < cnt; i++) {
+        obj cand = RT_ELEM(all, i, obj);
+        void *mi = method_handle(cand);
+        if (!mi || strcmp_(*(const char **)((uint8_t *)mi + MI_NAME), n)) continue;
+        if (np >= 0 && rt_call<int32_t>(RuntimeMethodInfo_GetParametersCount, cand) != np) continue;
+        return cand;
+    }
+    return nullptr;
+}
+
+#ifdef SILKNX_STACKCHK
+// -fstack-protector-all (debug builds): report which converted function overran its frame.
+extern "C" uintptr_t __stack_chk_guard = 0x5e1f2e3d4c5b6a79ull;
+extern "C" [[noreturn]] void __stack_chk_fail() {
+    uintptr_t at = (uintptr_t)__builtin_return_address(0) - (uintptr_t)__module_start;
+    silk::log("STACK SMASH detected in function returning at module+%lx (%s)", (uint64_t)at,
+              g_rt_context ? g_rt_context : "?");
+    svcBreak(0, 0, 0);
+    __builtin_unreachable();
+}
+#endif
+
+#ifdef SILKNX_SELFTEST
+// Does the GC still trace an object[]'s contents after its class pointer is swapped to long[]? (Unity's
+// asset liveness scan dereferences every object[] slot; mod objects keep raw data there.)
+namespace {
+constexpr uintptr_t kHide = 0x5a5a5a5a5a5a5a5aull;
+uintptr_t g_canary[8];
+__attribute__((noinline)) void fill_canaries(obj holder, int n) {
+    for (int i = 0; i < n; i++) {
+        obj s = rt_str("silknx-canary-0123456789abcdef");
+        if (holder) RT_ELEM(holder, i, obj) = s;
+        g_canary[i] = (uintptr_t)s ^ kHide;
+    }
+}
+__attribute__((noinline)) int churn_and_count(int n) {
+    int reused = 0;
+    for (int k = 0; k < 300000; k++) {
+        obj s = rt_str("silknx-canary-0123456789abcdef");
+        for (int i = 0; i < n; i++)
+            if (((uintptr_t)s ^ kHide) == g_canary[i]) reused++;
+    }
+    return reused;
+}
+__attribute__((noinline)) void collect() {
+    for (int i = 0; i < 3; i++) ((void (*)(int32_t, const void *))(silk_main_base + 0x4fc4d10))(2, nullptr);
+}
+}  // namespace
+
+void rt_selftest_gc() {
+    obj probe = rt_call<obj>(Array_CreateInstance, get_type("System.Int64, mscorlib"), (int32_t)1);
+    void *long_klass = probe->klass;
+    // control: unreferenced canaries must get reused, or this test proves nothing
+    fill_canaries(nullptr, 8);
+    collect();
+    int control = churn_and_count(8);
+    // object[] holder (kept alive by a GC handle) whose class pointer we swap to long[]
+    obj holder = new_object_array(8);
+    rt_call<intptr_t>(GCHandle_Alloc, holder);
+    fill_canaries(holder, 8);
+    holder->klass = (decltype(holder->klass))long_klass;
+    collect();
+    int swapped = churn_and_count(8);
+    holder->klass = (decltype(holder->klass))g_objarr_klass;
+    silk::log("selftest gc: unreferenced canaries reused=%d (want >0); referenced from a long[]-tagged object[] "
+              "reused=%d (want 0)", control, swapped);
+}
+#endif

@@ -54,6 +54,7 @@ struct rt_modtype {
     const uint32_t *ifaces;  // 0-terminated interface ids
     void *messages[MSG_COUNT];
     void *ctor;  // parameterless instance constructor (or null)
+    int32_t asm_index;
 };
 
 struct rt_literal {
@@ -65,6 +66,7 @@ struct rt_typeref {
     const char *aqn;      // game type: assembly-qualified name for Type.GetType
     rt_modtype *desc;     // mod type
     uint32_t raw;
+    const char *name;     // for diagnostics
 };
 
 struct rt_blob {
@@ -104,7 +106,16 @@ struct rt_plugin {
     int32_t asm_index;
 };
 
+struct rt_romfs_file {
+    const char *path;  // relative to the romfs root, '/' separated
+    uint64_t size;
+};
+
 extern "C" {
+extern const rt_romfs_file silk_romfs_files[];
+extern const uint32_t silk_romfs_count;
+extern const char *const silk_image_names[];
+extern const char silk_game_version[];
 extern const rt_literal silk_literals[];
 extern const uint32_t silk_literal_count;
 extern const rt_typeref silk_typerefs[];
@@ -152,14 +163,14 @@ bool rt_ready();
 [[noreturn]] void rt_unsupported(const char *what);
 [[noreturn]] void rt_throw(obj ex);
 [[noreturn]] void rt_rethrow();
-[[noreturn]] void rt_throw_nre();
+[[noreturn]] __attribute__((noinline)) void rt_throw_nre();
 [[noreturn]] void rt_throw_cast(obj o);
 [[noreturn]] void rt_throw_index();
 obj rt_exception();
 obj rt_take_exception();
 void rt_report_exception(const char *where);
 
-inline obj rt_nc(obj o) {
+__attribute__((always_inline)) inline obj rt_nc(obj o) {
     if (__builtin_expect(o == nullptr, 0)) rt_throw_nre();
     return o;
 }
@@ -201,6 +212,9 @@ extern "C" [[noreturn]] void rt_longjmp(rt_jmpbuf *, int);
 struct rt_handler {
     rt_jmpbuf jb;
     rt_handler *prev;
+#ifdef SILKNX_TRACE
+    uintptr_t pushed_by;  // where rt_push was called (debug: find leaked handlers)
+#endif
 };
 void rt_push(rt_handler *h);
 void rt_pop(rt_handler *h);
@@ -244,12 +258,17 @@ void *rt_mstatics(rt_modtype *d);
 // arrays
 #define RT_TYPE_RAW(size) ((int32_t)(0x40000000 | (size)))
 obj rt_new_array(int32_t tref, intptr_t n, size_t elem_size);
-inline intptr_t rt_ldlen(obj a) { return (intptr_t)((Il2CppArray *)rt_nc(a))->max_length; }
-inline uint8_t *rt_elem_addr(obj a, intptr_t i, size_t size) {
+__attribute__((always_inline)) inline intptr_t rt_ldlen(obj a) {
     Il2CppArray *arr = (Il2CppArray *)rt_nc(a);
-    if ((uintptr_t)i >= arr->max_length) rt_throw_index();
+    if ((uintptr_t)arr->bounds & 1) return (intptr_t)((uintptr_t)arr->bounds >> 16);  // mod-struct array
+    return (intptr_t)arr->max_length;
+}
+__attribute__((always_inline)) inline uint8_t *rt_elem_addr(obj a, intptr_t i, size_t size) {
+    Il2CppArray *arr = (Il2CppArray *)rt_nc(a);
+    if ((uintptr_t)i >= (uintptr_t)rt_ldlen(a)) rt_throw_index();
     return (uint8_t *)arr + 0x20 + (size_t)i * size;
 }
+extern const char *g_rt_context;
 #define RT_ELEM(a, i, T) (*(T *)rt_elem_addr((a), (intptr_t)(i), sizeof(T)))
 void rt_init_array(obj arr, const rt_blob *blob);
 
@@ -283,9 +302,75 @@ rt_modtype *rt_modtype_of_typeobj(obj t);
 int strcmp_(const char *a, const char *b);
 bool startswith_(const char *s, const char *pre);
 
+// Harmony.Patch(...) call sites resolved at build time: activate that site's hooks, return a non-null token.
+obj rt_harmony_activate(uint32_t site);
+
+// placeholders for objects of types the Switch build does not have (dev tools); harmless to call into
+obj rt_placeholder(const char *type_name);
+// Harmony FieldRefAccess: field offsets resolved at build time
+obj rt_fieldref(int32_t offset);
+void *rt_fieldref_ptr(obj fieldref, obj instance);
+// managed helpers
+obj rt_new_string_array(int32_t n);
+void *rt_string_klass();
+obj rt_object_to_string(obj o);  // virtual ToString() of a game object
+obj rt_native_enum(obj o, const char *where);
+obj rt_new_raw_storage(intptr_t slots);  // GC-traced slots that Unity's liveness scan skips
+obj rt_delegate_bound_target(obj d);  // m_target of a game delegate (guarded thunks)  // emulated collection -> object[] for game code
+obj rt_new_generic_instance(const char *aqn);
+obj rt_find_method(obj type, obj name, obj param_types);
+
 // logging
 void rt_log_obj(const char *prefix, obj msg);
 void rt_console(const char *fmt, ...);
+
+template <typename To, typename From>
+inline To rt_bitcast(const From &f) {
+    static_assert(sizeof(To) == sizeof(From), "emulated struct layout must match the BCL struct");
+    To t;
+    memcpy(&t, &f, sizeof(To));
+    return t;
+}
+
+// SILKNX_TRACE builds log the first call of every converted function (find where a crash happens).
+#ifdef SILKNX_TRACE
+#ifdef SILKNX_TRACE_ALL  // every call (capped): find the last thing that ran before a hard crash
+#define RT_TRACE(name) do { static int __n; if (g_rt_trace_budget > 0) { __n++; g_rt_trace_budget--; silk::log("trace: %s", name); } } while (0)
+extern int g_rt_trace_budget;
+#else
+#define RT_TRACE(name) do { static bool __t; if (!__t) { __t = true; silk::log("trace: %s", name); } } while (0)
+#endif
+// Debug: verify every converted function leaves the exception-handler stack as it found it.
+rt_handler *rt_eh_top();
+struct rt_eh_check {
+    const char *name;
+    rt_handler *top;
+    explicit rt_eh_check(const char *n) : name(n), top(rt_eh_top()) {}
+    ~rt_eh_check() {
+        if (rt_eh_top() != top) {
+            static int n;
+            if (n++ < 10) { silk::log("LEAK: exception handler stack changed across %s", name); }
+        }
+    }
+};
+#define RT_EH_CHECK(name) rt_eh_check __ehc(name)
+#ifdef SILKNX_TRACE_ALL
+#define RT_NTRACE(name) do { static int __n; if (g_rt_trace_budget > 0) { __n++; g_rt_trace_budget--; silk::log("native: %s", name); } } while (0)
+#endif
+#ifdef SILKNX_TRACE_ALL
+struct rt_hook_trace {
+    const char *n;
+    explicit rt_hook_trace(const char *name) : n(name) { if (g_rt_trace_budget-- > 0) silk::log("hook> %s", n); }
+    ~rt_hook_trace() { if (g_rt_trace_budget-- > 0) silk::log("hook< %s", n); }
+};
+#define RT_HOOK_TRACE(name) rt_hook_trace __ht(name)
+#else
+#define RT_HOOK_TRACE(name) do { static bool __t; if (!__t) { __t = true; silk::log("trace: hook %s", name); } } while (0)
+#endif
+#else
+#define RT_TRACE(name) ((void)0)
+#define RT_HOOK_TRACE(name) ((void)0)
+#endif
 
 // game calls helpers
 template <typename R, typename... A>

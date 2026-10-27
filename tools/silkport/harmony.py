@@ -50,6 +50,8 @@ class HarmonyPass:
         self.u = tr.u
         self.patches = []
         self.classes = []  # (asm_index, TypeDef) patch classes, index == patch-class id
+        self.manual_sites = {}  # (id(MethodDef), il offset of Harmony.Patch call) -> [patch-class ids]
+        self._unresolved = set()
 
     # ---------------------------------------------------------- discovery
     def scan(self, asm):
@@ -97,6 +99,166 @@ class HarmonyPass:
                                                     f'(target {target_md})', asm.name)
                         continue
                     self.patches.append(Patch(asm, td, target_md, kind, md, class_id))
+
+    # ---------------------------------------------------------- harmony.Patch(...) in code
+    def scan_manual(self, asm):
+        """Find `harmony.Patch(original, prefix, postfix, ...)` calls whose arguments are static."""
+        for td in asm.typedefs:
+            for md in td.methods:
+                body = md.body()
+                if body is None or b'\x28' not in body.code and b'\x6f' not in body.code:
+                    continue
+                try:
+                    self._scan_method(asm, td, md, body)
+                except Exception as e:
+                    self.tr.report.add('warn', f'{md}: could not analyse Harmony.Patch calls ({e})', asm.name)
+
+    def _calls_patch(self, md):
+        body = md.body()
+        if body is None:
+            return False
+        for at, name, kind, arg, nxt in decode(body.code):
+            if name in ('call', 'callvirt'):
+                try:
+                    t = md.asm.resolve_token(arg)
+                except Exception:
+                    continue
+                if getattr(t, 'name', None) == 'Patch' and getattr(t, 'parent', (None, None))[1] == 'HarmonyLib.Harmony':
+                    return True
+        return False
+
+    def _scan_method(self, asm, td, md, body, argvals=None, depth=0):
+        ins = decode(body.code)
+        stack, locs = [], {}
+        simple_push = ('ldarg', 'ldarga', 'ldsfld', 'ldsflda', 'ldftn', 'ldnull', 'ldloca', 'ldc.i8', 'ldc.r4',
+                       'ldc.r8', 'sizeof', 'arglist')
+        un = ('ldfld', 'ldflda', 'ldlen', 'neg', 'not', 'isinst', 'castclass', 'box', 'unbox', 'unbox.any',
+              'ldobj', 'ldvirtftn', 'localloc', 'ckfinite', 'refanyval', 'mkrefany')
+        for at, name, kind, arg, nxt in ins:
+            def pop(n):
+                vals = []
+                for _ in range(n):
+                    vals.append(stack.pop() if stack else None)
+                return vals[::-1]
+            base = name.split('.')[0]
+            if name in ('nop', 'volatile.', 'tail.', 'readonly.', 'constrained.', 'unaligned.', 'no.', 'break'):
+                continue
+            if name == 'ldtoken':
+                t = asm.resolve_token(arg)
+                stack.append(('type', t[1]) if isinstance(t, tuple) and t[0] in ('class', 'vt', 'gi') else
+                             ('type', __import__('silkport.model', fromlist=['PRIM_KEYS']).PRIM_KEYS.get(t[1]))
+                             if isinstance(t, tuple) and t[0] == 'prim' else None)
+            elif name == 'ldstr':
+                stack.append(('str', asm.us(arg & 0xFFFFFF)))
+            elif name.startswith('ldc.i4'):
+                stack.append(('int', arg if kind != 'n' else (-1 if name.endswith('m1') else int(name[7:]))))
+            elif name.startswith('ldloc') and not name.startswith('ldloca'):
+                i = int(name[6]) if name[5:6] == '.' and name[6:].isdigit() else arg
+                stack.append(locs.get(i))
+            elif name.startswith('stloc'):
+                i = int(name[6]) if name[5:6] == '.' and name[6:].isdigit() else arg
+                locs[i] = pop(1)[0]
+            elif name.startswith('ldarg') and not name.startswith('ldarga'):
+                i = int(name[6]) if name[5:6] == '.' and name[6:].isdigit() else arg
+                stack.append(argvals[i] if argvals and i < len(argvals) else None)
+            elif name.startswith(simple_push) or name in simple_push:
+                stack.append(None)
+            elif name == 'dup':
+                stack.append(stack[-1] if stack else None)
+            elif name == 'newarr':
+                n = pop(1)[0]
+                stack.append(['arr', [None] * (n[1] if n and n[0] == 'int' and 0 <= n[1] < 64 else 0)])
+            elif name.startswith('stelem'):
+                a, i, v = pop(3)
+                if a and a[0] == 'arr' and i and i[0] == 'int' and i[1] < len(a[1]):
+                    a[1][i[1]] = v
+            elif name.startswith('ldelem'):
+                pop(2)
+                stack.append(None)
+            elif name in ('call', 'callvirt', 'newobj'):
+                target = asm.resolve_token(arg)
+                if not hasattr(target, 'params'):
+                    stack.clear()
+                    continue
+                n = len(target.params) + (1 if target.has_this and name != 'newobj' else 0)
+                argv = pop(n)
+                owner = target.parent[1] if hasattr(target, 'parent') else target.owner.key
+                if owner == 'HarmonyLib.Harmony' and target.name == 'Patch':
+                    self._register_manual(asm, td, md, at, argv[1:] if name != 'newobj' else argv)
+                    stack.append(None)
+                    continue
+                # helper in the mod that itself calls Harmony.Patch: analyse it with these arguments
+                if isinstance(target, MethodDef) and target.asm is asm and depth < 3 and target is not md and \
+                        self._calls_patch(target):
+                    self._scan_method(asm, target.owner, target, target.body(), argv, depth + 1)
+                    if target.ret != ('prim', 'void'):
+                        stack.append(None)
+                    continue
+                val = None
+                try:
+                    if owner == 'HarmonyLib.HarmonyMethod' and name == 'newobj':
+                        val = self._harmony_method(argv)
+                    else:
+                        val = self.eval_call(target, argv)
+                except Exception:
+                    val = None
+                if target.ret != ('prim', 'void') or name == 'newobj':
+                    stack.append(val)
+            elif name.startswith(('stfld', 'stind', 'stobj', 'cpobj')) or base in ('beq', 'bne', 'bge', 'bgt',
+                                                                                    'ble', 'blt'):
+                pop(2)
+            elif name.startswith(('starg', 'stsfld', 'pop', 'brtrue', 'brfalse', 'switch', 'initobj')):
+                pop(1)
+            elif name.startswith(un) or name.startswith(('ldind', 'conv')):
+                pop(1)
+                stack.append(None)
+            elif base in ('add', 'sub', 'mul', 'div', 'rem', 'and', 'or', 'xor', 'shl', 'shr', 'ceq', 'cgt',
+                          'clt'):
+                pop(2)
+                stack.append(None)
+            elif name in ('br', 'br.s'):
+                continue
+            else:  # ret, leave, throw, endfinally, ... : the stack is not carried across
+                stack.clear()
+
+    def report_unresolved(self):
+        for key, at, mdname, asm_name in sorted(self._unresolved, key=lambda x: x[2]):
+            if (key, at) not in self.manual_sites:
+                self.tr.report.add('error', f'{mdname}: Harmony.Patch target could not be determined at build time',
+                                   asm_name)
+
+    def _harmony_method(self, argv):
+        if len(argv) >= 1 and argv[0] and argv[0][0] == 'method':
+            return ('hm', argv[0][1])
+        if len(argv) >= 2 and argv[0] and argv[0][0] == 'type' and argv[1] and argv[1][0] == 'str':
+            t = self.u.get(argv[0][1])
+            types = None
+            if len(argv) >= 3 and argv[2] and argv[2][0] == 'arr':
+                types = [x[1] if x else None for x in argv[2][1]]
+            m = self.find_quiet(t, argv[1][1], types) if t else None
+            return ('hm', m) if m else None
+        return None
+
+    def _register_manual(self, asm, td, md, at, args):
+        original = args[0] if args else None
+        if not original or original[0] != 'method':
+            if (id(md), at) not in self.manual_sites:  # may still be resolved through another caller
+                self._unresolved.add((id(md), at, str(md), asm.name))
+            return
+        kinds = ['Prefix', 'Postfix', 'Transpiler', 'Finalizer', 'ILManipulator']
+        site = len(self.classes)
+        self.classes.append((self.tr.asm_index(asm), td))
+        any_patch = False
+        for kind, v in zip(kinds, args[1:]):
+            if not v or v[0] != 'hm':
+                continue
+            if kind not in ('Prefix', 'Postfix'):
+                self.tr.report.add('error', f'{md}: Harmony {kind} on {original[1]} cannot run on Switch', asm.name)
+                continue
+            self.patches.append(Patch(asm, td, original[1], kind, v[1], site))
+            any_patch = True
+        if any_patch:
+            self.manual_sites.setdefault((id(md), at), []).append(site)
 
     def has_patch_methods(self, td):
         return any(self.patch_kind(m) for m in td.methods)
@@ -389,6 +551,7 @@ class HarmonyPass:
                     states[p.index] = ts.cty(st)
         for idx, ct in states.items():
             out.append(f'    {ct} __state{idx}{{}};')
+        out.append(f'    const char* __saved_ctx = g_rt_context; g_rt_context = "Harmony patch on {cstr(str(target))}";')
         out.append('    RT_GUARD_BEGIN')
         for p in sorted([p for p in plist if p.kind == 'Prefix'], key=lambda p: p.index):
             fn = tr.fn(p.patch_md)
@@ -419,6 +582,7 @@ class HarmonyPass:
                 out.append(f'        {call};')
             out.append('    }')
         out.append('    RT_GUARD_END')
+        out.append('    g_rt_context = __saved_ctx;')
         if not void:
             out.append('    return __result;')
         out.append('}')

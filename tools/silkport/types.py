@@ -131,7 +131,13 @@ class TypeSystem:
             return 'obj'
         if self.is_enum_sig(sig):
             return self.cty(self.u.enum_underlying(self.td(sig)))
+        if self.unknown_vt(sig):
+            return 'int32_t'
         return self.struct_for(sig)
+
+    def unknown_vt(self, sig):
+        """A value type with no definition anywhere (stripped from the Switch build): almost always an enum."""
+        return sig[0] == 'vt' and self.u.get(sig[1]) is None  # never for generic structs
 
     # ---------------------------------------------------------- value type layouts
     def struct_for(self, sig):
@@ -207,6 +213,8 @@ class TypeSystem:
 
     def alignof(self, sig):
         sig = norm(sig)
+        if self.is_vt(sig) and self.unknown_vt(sig):
+            return 4
         if sig[0] == 'prim':
             return min(PRIM_SIZE.get(sig[1], 8), 8)
         if self.is_vt(sig) and not self.is_enum_sig(sig):
@@ -218,6 +226,8 @@ class TypeSystem:
 
     def sizeof(self, sig):
         sig = norm(sig)
+        if self.is_vt(sig) and self.unknown_vt(sig):
+            return 4
         if sig[0] == 'prim':
             return PRIM_SIZE[sig[1]]
         if sig[0] in ('byref', 'ptr', 'sz', 'md'):

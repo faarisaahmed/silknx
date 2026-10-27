@@ -149,6 +149,7 @@ class Assembly:
             self.sections.append((va, max(vsize, rsize), raw))
         cli_rva = struct.unpack_from('<I', d, dd + 14 * 8)[0]
         cli = self.off(cli_rva)
+        self.resources_rva, self.resources_size = struct.unpack_from('<II', d, cli + 0x18)
         meta_rva = struct.unpack_from('<I', d, cli + 8)[0]
         m = self.off(meta_rva)
         assert d[m:m + 4] == b'BSJB'
@@ -223,6 +224,19 @@ class Assembly:
             o += rs * self.rows[t]
 
     # heaps
+    def manifest_resources(self):
+        """[(name, bytes)] for resources embedded in this assembly."""
+        out = []
+        if not self.resources_rva:
+            return out
+        base = self.off(self.resources_rva)
+        for offset, flags, name, impl in self.tables.get(0x28, []):
+            if impl[1]:  # stored in another file/assembly
+                continue
+            n = struct.unpack_from('<I', self.d, base + offset)[0]
+            out.append((self.string(name), self.d[base + offset + 4:base + offset + 4 + n]))
+        return out
+
     def string(self, i):
         b = self.streams['#Strings'][0] + i
         return self.d[b:self.d.index(b'\0', b)].decode('utf-8', 'replace')

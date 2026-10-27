@@ -50,16 +50,19 @@ def convert(plugins_dir, name='SilkNX', config_dir=None, install=False, only=Non
     db = SwitchDB()
     tr = Translator(u, db, mods, implemented_shims())
     hp = HarmonyPass(tr)
+    tr.harmony = hp
 
     plugins = []
     for asm in mods:
         tr.report.cur_asm = asm.name
         tr.report.items.setdefault(asm.name, [])
         hp.scan(asm)
+        hp.scan_manual(asm)
         for td in asm.typedefs:
             for key, args, named in td.attrs:
                 if key == 'BepInEx.BepInPlugin' and args:
                     plugins.append((asm, td, args))
+    hp.report_unresolved()
     # roots: plugin types (ctor + messages) and patch methods
     for asm, td, args in plugins:
         info = tr.mod_type(tr.owner_sig(td, ()))
@@ -94,11 +97,14 @@ def convert(plugins_dir, name='SilkNX', config_dir=None, install=False, only=Non
         info = tr.mod_type(tr.owner_sig(td, ()))
         ctor = td.method('.ctor', 0)
         guid, pname, ver = (list(args) + ['', '', ''])[:3]
-        folder = os.path.basename(os.path.dirname(asm.path))
+        folder = os.path.relpath(os.path.dirname(asm.path), plugins_dir).replace(os.sep, '/')
+        folder = '' if folder == '.' else folder
         lines.append(f'    {{"{cstr(guid)}", "{cstr(pname)}", "{cstr(ver)}", "{cstr(folder)}", &D_{info.cname}, '
                      f'{"(void*)&" + tr.fn(ctor) if ctor else "nullptr"}, {tr.asm_index(asm)}}},')
     lines.append('    {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, -1}};')
     lines.append(f'extern "C" const uint32_t silk_plugin_count = {len(plugins)};')
+    lines.append(f'extern "C" const uint32_t silk_mid_tostring = '
+                 f'{tr.method_id(("virt", "System.Object", "ToString", "()"))};')
     lines.append(f'extern "C" const uint32_t silk_mid_movenext = '
                  f'{tr.method_id(("virt", "System.Collections.IEnumerator", "MoveNext", "()"))};')
     lines.append(f'extern "C" const uint32_t silk_mid_current = '
@@ -108,25 +114,56 @@ def convert(plugins_dir, name='SilkNX', config_dir=None, install=False, only=Non
     build = os.path.join(ROOT, 'build', name)
     os.makedirs(build, exist_ok=True)
     gen_cpp = os.path.join(build, 'silkport_gen.cpp')
+    if os.environ.get('SILKNX_TRACE') == '2':
+        lines = _trace_native_calls(lines, db)
     open(gen_cpp, 'w').write('\n'.join(lines))
 
     # assets + configs -> romfs
     romfs = os.path.join(build, 'romfs')
     shutil.rmtree(romfs, ignore_errors=True)
     base = os.path.join(romfs, 'Data', 'StreamingAssets', 'SilkNX')
-    for asm, td, args in plugins:
+    copied = set()
+    for asm in mods:
         src = os.path.dirname(asm.path)
-        if os.path.abspath(src) == os.path.abspath(plugins_dir):
+        rel = os.path.relpath(src, plugins_dir)
+        if rel == '.' or rel in copied:
             continue
-        dst = os.path.join(base, 'plugins', os.path.basename(src))
-        shutil.copytree(src, dst, ignore=shutil.ignore_patterns('*.dll', '*.pdb', '*.xml', '.DS_Store', '._*'),
+        copied.add(rel)
+        dst = os.path.join(base, 'plugins', rel)
+        shutil.copytree(src, dst, ignore=shutil.ignore_patterns('*.dll', '*.pdb', '*.xml', '.DS_Store', '._*',
+                                                                'Dumps', 'TextDumps', '*.bak*'),
                         dirs_exist_ok=True)
+    for asm in mods:  # embedded resources (Assembly.GetManifestResourceStream)
+        for rname, data in asm.manifest_resources():
+            rdir = os.path.join(base, 'resources', asm.name)
+            os.makedirs(rdir, exist_ok=True)
+            open(os.path.join(rdir, rname), 'wb').write(data)
     if config_dir and os.path.isdir(config_dir):
         os.makedirs(os.path.join(base, 'config'), exist_ok=True)
         for asm, td, args in plugins:
             cfg = os.path.join(config_dir, f'{args[0]}.cfg')
             if os.path.exists(cfg):
                 shutil.copy(cfg, os.path.join(base, 'config'))
+    index = []
+    if os.path.isdir(romfs):
+        for root, dirs, files in os.walk(romfs):
+            for f in files:
+                full = os.path.join(root, f)
+                index.append((os.path.relpath(full, romfs).replace(os.sep, '/'), os.path.getsize(full)))
+    index.sort()
+    extra = ['extern "C" const rt_romfs_file silk_romfs_files[] = {']
+    extra += [f'    {{"{cstr(p)}", {sz}}},' for p, sz in index] + ['    {nullptr, 0}};',
+              f'extern "C" const uint32_t silk_romfs_count = {len(index)};']
+    images = sorted({t['image'][:-4] for t in db.types.values() if t['image'].endswith('.dll')})
+    extra.append('extern "C" const char* const silk_image_names[] = {' +
+                 ', '.join(f'"{cstr(i)}"' for i in images) + ', nullptr};')
+    ver = ''
+    meta = os.path.join(ROOT, 'game', 'romfs', 'Data', 'StreamingAssets', 'BuildMetadata.json')
+    if os.path.exists(meta):
+        ver = '1.0.' + str(json.load(open(meta)).get('revision', ''))
+    extra.append(f'extern "C" const char silk_game_version[] = "{cstr(ver)}";')
+    with open(gen_cpp, 'a') as f:
+        f.write('\n'.join(extra) + '\n')
     write_report(tr, plugins, hooks, build)
     return tr, gen_cpp, hooks, romfs
 
@@ -163,6 +200,8 @@ def build(plugins, config=None, name='SilkNX', install=True, atmosphere=None, on
     hdr = ['// Generated from sdk/rt/rt.json. Do not edit.', '#pragma once', '#include <stdint.h>', 'namespace rva {']
     for m in rtcfg['methods']:
         hdr.append(f'constexpr uintptr_t {m["name"]} = {dump.method(m["method"], m.get("argc"), m.get("params")):#x};')
+    nmeth = len(dump.types['System.String']['methods']) if hasattr(dump, 'types') else 0
+    hdr += [f'constexpr uint32_t String_method_count = {nmeth};']
     hdr += ['}', 'namespace off {']
     for f in rtcfg['fields']:
         hdr.append(f'constexpr uintptr_t {f["name"]} = {dump.field(f["field"]):#x};')
@@ -174,7 +213,7 @@ def build(plugins, config=None, name='SilkNX', install=True, atmosphere=None, on
                        include_dirs=[RT_DIR, gen],
                        extra_cflags=['-Wno-unused-label', '-Wno-unused-variable', '-Wno-unused-but-set-variable',
                                      '-Wno-unused-value', '-Wno-parentheses-equality', '-Wno-tautological-compare',
-                                     '-Wno-self-assign'] + (['-DSILKNX_SELFTEST'] if os.environ.get('SILKNX_SELFTEST') else []),
+                                     '-Wno-self-assign'] + (['-DSILKNX_SELFTEST'] if os.environ.get('SILKNX_SELFTEST') else []) + (['-DSILKNX_AUTOTEST'] if os.environ.get('SILKNX_AUTOTEST') else []) + (['-DSILKNX_TRACE'] if os.environ.get('SILKNX_TRACE') else []) + (['-DSILKNX_TRACE_ALL'] if os.environ.get('SILKNX_TRACE') == '2' else []) + (['-fstack-protector-all', '-DSILKNX_STACKCHK'] if os.environ.get('SILKNX_STACKCHK') else []) + (['-DSILKNX_NOEH'] if os.environ.get('SILKNX_NOEH') else []) + ([f'-DSILKNX_SKIP_ONGUI="{os.environ["SILKNX_SKIP_ONGUI"]}"'] if os.environ.get('SILKNX_SKIP_ONGUI') else []),
                        romfs_dir=romfs if os.path.isdir(romfs) else None, install=False, verbose=False,
                        sdk_sources=('crt0.S', 'svc.S', 'runtime.cpp'))
     if install:
@@ -206,3 +245,27 @@ def export_atmosphere(out, dest, name='SilkNX'):
     zip_path = shutil.make_archive(os.path.join(dest, 'SilkNX-atmosphere'), 'zip', dest, 'atmosphere')
     print(f'Atmosphere SD files: {sd}')
     print(f'  (also zipped: {zip_path}) - copy/extract the "atmosphere" folder to the root of your SD card')
+
+
+def _trace_native_calls(lines, db):
+    """Debug (SILKNX_TRACE=2): log every direct game call by name, right before the statement making it."""
+    names = {}
+    for t in db.types.values():
+        for m in t['methods']:
+            if m.get('rva'):
+                names.setdefault(m['rva'], f"{t['name']}::{m['name']}")
+    out, in_fn = [], False
+    pat = re.compile(r'silk_main_base \+ 0x([0-9a-f]+)\)')
+    for ln in lines:
+        for sub in ln.split('\n'):
+            if sub.startswith(('void F_', 'obj F_', 'bool F_', 'int', 'float F_', 'double F_', 'V_', 'uint')) and \
+                    sub.endswith('{'):
+                in_fn = True
+            elif sub == '}':
+                in_fn = False
+            m = pat.search(sub)
+            if in_fn and m and sub.startswith('    ') and not sub.lstrip().startswith(('case ', 'default')):
+                nm = names.get(int(m.group(1), 16), m.group(1)).replace('"', "'")
+                out.append(f'    RT_NTRACE("{nm}");')
+            out.append(sub)
+    return out

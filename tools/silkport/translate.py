@@ -1,4 +1,6 @@
 """IL -> C++ translation of method bodies."""
+import os
+import re
 import struct
 
 from .model import MethodDef, MemberRef, FieldDef, sig_str, subst, PRIM_KEYS
@@ -170,7 +172,14 @@ class MethodTranslator:
         decl += self.eh_decls
         attr = '__attribute__((optnone)) ' if self.uses_catch else ''
         head = f'{attr}{ret} {self.cname}({", ".join(params)})'
-        return head, [head + ' {', '    (void)mi;'] + decl + out_lines + ['}']
+        trace = [f'    RT_TRACE("{cstr(str(self.md))[:150]}");']
+        if os.environ.get('SILKNX_TRACE'):
+            trace.append(f'    RT_EH_CHECK("{cstr(str(self.md))[:150]}");')
+        stub = os.environ.get('SILKNX_STUB_FUNCS')  # debug bisect: matching functions return immediately
+        if stub and re.search(stub, str(self.md)) and not self.md.is_ctor:
+            early = '    return;' if ret == 'void' else f'    return {ret}{{}};'
+            trace.append(early)
+        return head, [head + ' {', '    (void)mi;'] + trace + decl + out_lines + ['}']
 
     # ---------------------------------------------------------- flow analysis (stack types)
     def flow(self):
@@ -183,15 +192,17 @@ class MethodTranslator:
             flags, toff, tlen, hoff, hlen, ctok = c
             self.try_starts.setdefault(toff, []).append(c)
             self.branch_targets.add(hoff)
-            if flags == 0:
+            if flags in (0, 1):
                 self.uses_catch = True
-            if flags == 1:
-                raise Unsupported('exception filters')
+            if flags == 1:  # filter: the filter block starts at ctok and receives the exception
+                self.branch_targets.add(ctok)
         states = {0: ()}
         for c in self.body.clauses:
             flags, toff, tlen, hoff, hlen, ctok = c
-            states[hoff] = (SV(OBJ, ('class', 'System.Exception')),) if flags == 0 else ()
-        work = [0] + [c[3] for c in self.body.clauses]
+            states[hoff] = (SV(OBJ, ('class', 'System.Exception')),) if flags in (0, 1) else ()
+            if flags == 1:
+                states[ctok] = (SV(OBJ, ('class', 'System.Exception')),)
+        work = [0] + [c[3] for c in self.body.clauses] + [c[5] for c in self.body.clauses if c[0] == 1]
         visited = set()
         while work:
             at = work.pop()
@@ -212,12 +223,14 @@ class MethodTranslator:
                 if s_off not in states:
                     states[s_off] = tuple(stack)
                 work.append(s_off)
+        for c in self.body.clauses:
+            if c[0] in (2, 4) and f'    int32_t fin_{c[3]:x} = 0;' not in self.eh_decls:
+                self.eh_decls.append(f'    int32_t fin_{c[3]:x} = 0;')
         self.emit_mode = True
-        # stash leave targets for finally chains
         return states
 
     # ---------------------------------------------------------- exception handling
-    def enclosing(self, off, kinds=(0, 2, 4)):
+    def enclosing(self, off, kinds=(0, 1, 2, 4)):
         """Clauses whose try block contains `off`, innermost first."""
         cs = [c for c in self.body.clauses if c[1] <= off < c[1] + c[2] and c[0] in kinds]
         cs.sort(key=lambda c: c[2])
@@ -233,6 +246,8 @@ class MethodTranslator:
         hid = f'h_{toff:x}_{hoff:x}'
         if f'    rt_handler {hid};' not in self.eh_decls:
             self.eh_decls.append(f'    rt_handler {hid};')
+        if flags == 1:  # filter
+            return [f'    if (RT_TRY({hid})) {{ s0_obj = rt_take_exception(); goto {self.label(ctok)}; }}']
         if flags == 0:  # catch
             ctype = self.tr.type_check_expr(self.body_asm_type(ctok), 'rt_exception()', self)
             return [f'    if (RT_TRY({hid})) {{',
@@ -252,8 +267,9 @@ class MethodTranslator:
     def leave(self, target):
         """Exit protected regions up to `target`, running finally blocks."""
         here = self.cur
-        exited = [c for c in self.enclosing(here, (0, 2, 4)) if not (c[1] <= target < c[1] + c[2])]
-        # leaving a catch handler region does not need to pop (already popped on catch)
+        exited = [c for c in self.enclosing(here) if not (c[1] <= target < c[1] + c[2])]
+        # every exited try block (catch, filter, finally, fault) pops its handler; leaving a catch
+        # handler region needs nothing (the handler was popped when the exception was caught)
         out = []
         chain = []
         for c in exited:
@@ -373,7 +389,7 @@ class MethodTranslator:
             return [nxt]
         if name == 'ldstr':
             s = self.md.asm.us(arg & 0xFFFFFF)
-            self.push(stack, OBJ, ('prim', 'string'), self.tr.literal(s))
+            self.push(stack, OBJ, ('prim', 'string'), self.tr.literal(s), extra=('lit', s))
             return [nxt]
         if name == 'dup':
             v, sv = stack[-1:][0], stack[-1]
@@ -595,6 +611,8 @@ class MethodTranslator:
         if name == 'box':
             v, sv = self.pop(stack)
             t = self.s(self.md.asm.resolve_token(arg))
+            if t[0] == 'class' and ts.u.get(t[1]) is None and sv.ct in (I4, I8):
+                t = ('prim', 'i4' if sv.ct == I4 else 'i8')  # box of an enum the Switch build stripped
             self.push(stack, OBJ, t if not ts.is_vt(t) else ('boxed', t), self.tr.box_expr(v, sv, t, self))
             return [nxt]
         if name in ('unbox.any', 'unbox'):
@@ -632,7 +650,14 @@ class MethodTranslator:
         if name == 'ckfinite':
             return [nxt]
         if name == 'endfilter':
-            raise Unsupported('filter')
+            v, sv = self.pop(stack)
+            c = [c for c in self.body.clauses if c[0] == 1 and c[5] <= self.cur < c[3]]
+            if not c:
+                raise Unsupported('endfilter outside a filter')
+            self.vars['s0_obj'] = 'obj'
+            L.append(f'if ({v}) {{ s0_obj = rt_exception(); goto {self.label(c[0][3])}; }}')
+            L.append('rt_rethrow();')
+            return []
         raise Unsupported(f'opcode {name}')
 
     # ---------------------------------------------------------- value conversions
