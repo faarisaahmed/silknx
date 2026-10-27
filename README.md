@@ -80,8 +80,15 @@ After each conversion SilkNX prints a report per mod: `OK`, or the exact things 
 ## Controls
 
 The Switch has no keyboard, so keyboard shortcuts used by mods become controller combos:
-**hold L3 (click the left stick) + press a button**. The first time a mod uses a key, SilkNX shows the combo
-on screen, e.g. `Keyboard F11 = hold L3 + press R`. Shift/Ctrl/Alt count as "holding L3".
+**hold L3 (click the left stick) + press a button**. To see which combo each key got, turn on the cursor (below):
+it lists them, e.g. `Mod keys: 1 = L3+R, F11 = L3+ZR`. Shift/Ctrl/Alt count as "holding L3".
+
+Mod menus made for a mouse (skin pickers, settings windows) get a **cursor**: click **both sticks (L3 + R3)** to
+show it. Left stick moves it, **A** clicks (hold A to drag), right stick scrolls, **B** hides it. While it is
+shown, the game ignores the controller so clicks don't make Hornet jump. Typing into text boxes isn't supported yet.
+
+Messages on screen are kept short: mods' errors (each shown once) and messages meant for the player. Everything
+mods log is in the Ryujinx log (see *Troubleshooting*).
 
 ## What works
 
@@ -96,7 +103,10 @@ SilkNX translates each mod's compiled C# into native Switch code and emulates th
 | Generic collections, LINQ, delegates, events, exceptions (from mods *and* from the game; they are logged instead of crashing) | `try/catch` inside a mod can't catch exceptions thrown *by the game* (they're caught and logged one level up) |
 
 Tested so far: **ShowDamage HealthBar**, **Skip Intro**, **Toggle HUD**, **MapMod**, and **Stitchwork** skins
-(e.g. **Nightmare Queen**: Hornet's full skin in game).
+(e.g. **Nightmare Queen**: Hornet's skin in game).
+
+> **Skins are a work in progress.** Hornet herself is reskinned, but not all of a skin pack's art shows up on
+> Switch yet (some menu art, effects and particles). Most other mods work.
 
 **Skins and texture packs:** the Switch gives the game far less memory than a PC, so SilkNX converts the PNGs in
 your mod folders to the Switch's own GPU texture format (ASTC) when it builds — a skin that would need ~750 MB
@@ -152,7 +162,8 @@ is the most likely cause.
 
 ## Legal
 
-SilkNX contains no Nintendo, Team Cherry, or third-party mod code. You need legitimate copies of the game.
+SilkNX contains no Nintendo, Team Cherry, or third-party mod code. The only game asset included is Silksong's
+37×37 mouse-pointer image (`sdk/rt/cursor_img.h`), used for the controller cursor. You need legitimate copies of the game.
 Mods remain the property of their authors; share converted builds only with their permission.
 
 License: MIT

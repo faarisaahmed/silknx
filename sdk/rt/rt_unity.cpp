@@ -9,6 +9,9 @@ using unity::Color;
 void rt_boot_plugins(obj manager_go);
 void rt_autotest_frame();
 void rt_input_frame();
+int rt_cursor_gui_begin();
+void rt_cursor_gui_end(int restore);
+void rt_cursor_draw();
 
 namespace {
 
@@ -375,6 +378,7 @@ SILK_HOOK(CP_Update, void, obj self, const void *mi) {
 SILK_HOOK(CP_OnGUI, void, obj self, const void *mi) {
     RT_HOOK_TRACE("CP_OnGUI");
     if (self != g_cp) return orig_CP_OnGUI(self, mi);
+    int restore = rt_cursor_gui_begin();
     for (int i = 0; i < g_nhosts; i++) {
         HostRec &h = g_hosts[i];
         if (!h.host || !h.active) continue;
@@ -389,7 +393,9 @@ SILK_HOOK(CP_OnGUI, void, obj self, const void *mi) {
 #ifdef SILKNX_TRACE_ALL
     if (g_rt_trace_budget-- > 0) silk::log("trace: OnGUI mods done");
 #endif
+    rt_cursor_gui_end(restore);
     draw_console();
+    rt_cursor_draw();
 #ifdef SILKNX_TRACE_ALL
     if (g_rt_trace_budget-- > 0) silk::log("trace: console done");
 #endif
@@ -612,7 +618,7 @@ SILK_HOOK(RT_Boot, void, const void *mi) {
     g_cp = roots[2] = rt_call<obj>(GameObject_AddComponent, g_manager_go, type_by_name("CodeProfiler, Assembly-CSharp"));
     g_creating_global = false;
     silk::log("SilkNX runtime ready (manager=%p ub=%p cp=%p)", g_manager_go, g_ub, g_cp);
-    rt_console("SilkNX: loading %u mod(s)", silk_plugin_count);
+    rt_console("SilkNX: %u mod(s) loaded", silk_plugin_count);
     rt_boot_plugins(g_manager_go);
 #ifdef SILKNX_TRACE
     silk::log("trace: boot done");

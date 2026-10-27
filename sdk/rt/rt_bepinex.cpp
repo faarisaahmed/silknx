@@ -74,7 +74,6 @@ void rt_boot_plugins(obj manager_go) {
     for (uint32_t i = 0; i < silk_plugin_count; i++) {
         const rt_plugin &p = silk_plugins[i];
         silk::log("loading plugin %s %s (%s)", p.name, p.version, p.guid);
-        rt_console("[SilkNX] %s %s", p.name, p.version);
         rt_add_component(manager_go, p.desc);
     }
 }
@@ -95,13 +94,15 @@ obj shim_BepInEx_BaseUnityPlugin__get_Logger(obj self, int32_t) { return ((ModPl
 static void log_with(obj self, const char *level, obj msg) {
     char name[64] = "mod", prefix[96];
     if (rt_is_mod(self)) rt_str_to_utf8(((EmuLogger *)self)->name, name, sizeof(name));
-    silk::snfmt(prefix, sizeof(prefix), "[%s%s] ", level, name);
-    // like BepInEx's default console: debug output goes to the log only, not on screen
-    rt_log_obj(prefix, msg, strcmp_(level, "debug ") != 0);
+    silk::snfmt(prefix, sizeof(prefix), "[%s%s] ", strcmp_(level, "msg ") ? level : "", name);
+    // Everything goes to the log; the screen only gets messages meant for the player (LogMessage) and errors,
+    // each distinct error once (mods often repeat theirs on every room change).
+    bool err = level[0] == 'E' || level[0] == 'F';
+    rt_log_obj(prefix, msg, err || !strcmp_(level, "msg "), err);
 }
 
 void shim_BepInEx_Logging_ManualLogSource__LogInfo__object(obj self, obj msg, int32_t) { log_with(self, "", msg); }
-void shim_BepInEx_Logging_ManualLogSource__LogMessage__object(obj self, obj msg, int32_t) { log_with(self, "", msg); }
+void shim_BepInEx_Logging_ManualLogSource__LogMessage__object(obj self, obj msg, int32_t) { log_with(self, "msg ", msg); }
 void shim_BepInEx_Logging_ManualLogSource__LogDebug__object(obj self, obj msg, int32_t) { log_with(self, "debug ", msg); }
 void shim_BepInEx_Logging_ManualLogSource__LogWarning__object(obj self, obj msg, int32_t) { log_with(self, "warn ", msg); }
 void shim_BepInEx_Logging_ManualLogSource__LogError__object(obj self, obj msg, int32_t) { log_with(self, "ERROR ", msg); }
@@ -109,7 +110,7 @@ void shim_BepInEx_Logging_ManualLogSource__LogFatal__object(obj self, obj msg, i
 void shim_BepInEx_Logging_ManualLogSource__Log__BepInEx_Logging_LogLevel_object(obj self, int32_t level, obj msg,
                                                                                int32_t) {
     // BepInEx.Logging.LogLevel flags: Fatal 1, Error 2, Warning 4, Message 8, Info 16, Debug 32
-    const char *tag = (level & 1) ? "FATAL " : (level & 2) ? "ERROR " : (level & 4) ? "warn " : (level & 24) ? "" : "debug ";
+    const char *tag = (level & 1) ? "FATAL " : (level & 2) ? "ERROR " : (level & 4) ? "warn " : (level & 8) ? "msg " : (level & 16) ? "" : "debug ";
     log_with(self, tag, msg);
 }
 
@@ -184,9 +185,34 @@ bool shim_UnityEngine_Behaviour__get_isActiveAndEnabled(obj self) {
     return rt_call<bool>(Behaviour_get_isActiveAndEnabled, rt_nc(self));
 }
 
+// Sprite atlas textures are named "sactx-<page>-<w>x<h>-<format>-<atlas>-<hash>". PC mods recognise them by the
+// PC formats ("-BC7-", "DXT5|BC3-"); the Switch's are "-ASTC 4x4-", "-ASTC 6x6-"... Report those as "-BC7-".
+static obj pc_atlas_name(obj name) {
+    auto *s = (Il2CppString *)name;
+    static const char16_t kPre[] = u"sactx-", kFmt[] = u"-ASTC ";
+    if (!s || s->length < 16) return name;
+    for (int i = 0; i < 6; i++)
+        if (s->chars[i] != kPre[i]) return name;
+    for (int i = 6; i + 6 <= s->length; i++) {
+        int k = 0;
+        while (k < 6 && s->chars[i + k] == kFmt[k]) k++;
+        if (k < 6) continue;
+        int end = i + 6;  // past "-ASTC ", skip the block size up to the next '-'
+        while (end < s->length && s->chars[end] != u'-') end++;
+        if (end == s->length) return name;
+        char16_t buf[256];
+        int n = 0;
+        for (int j = 0; j < i && n < 250; j++) buf[n++] = s->chars[j];
+        for (char16_t c : u"-BC7") if (c) buf[n++] = c;
+        for (int j = end; j < s->length && n < 255; j++) buf[n++] = s->chars[j];
+        return rt_str16(buf, n);
+    }
+    return name;
+}
+
 obj shim_UnityEngine_Object__get_name(obj self) {
     if (rt_is_mod(self)) return rt_call<obj>(Object_get_name, ((ModComponent *)self)->go);
-    return rt_call<obj>(Object_get_name, rt_nc(self));
+    return pc_atlas_name(rt_call<obj>(Object_get_name, rt_nc(self)));
 }
 
 bool shim_UnityEngine_Object__op_Implicit__UnityEngine_Object(obj o) { return !unity_null(o); }
@@ -253,10 +279,12 @@ void shim_UnityEngine_MonoBehaviour__StopAllCoroutines(obj self) {
 
 namespace {
 constexpr int kModifier = 5;  // InControl LeftStickButton (L3)
-const int kButtons[] = {18, 17, 16, 15, 11, 12, 13, 14, 22, 21, 20, 19, 10};
+// (L3 + R3 is taken: it toggles the mouse cursor, rt_cursor.cpp)
+const int kButtons[] = {18, 17, 16, 15, 11, 12, 13, 14, 22, 21, 20, 19};
 const char *const kButtonNames[] = {"R", "L", "ZR", "ZL", "D-pad Up", "D-pad Down", "D-pad Left", "D-pad Right",
-                                    "X", "Y", "A", "B", "R3"};
-int32_t g_keys[13];  // KeyCode assigned to each combo (0 = free)
+                                    "X", "Y", "A", "B"};
+constexpr int kCombos = sizeof(kButtons) / sizeof(kButtons[0]);
+int32_t g_keys[kCombos];  // KeyCode assigned to each combo (0 = free)
 
 const char *key_name(int32_t k, char *buf) {
     if (k >= 282 && k <= 296) {
@@ -284,14 +312,13 @@ bool pressed(int type) {
 }
 
 int combo_for(int32_t key) {
-    for (int i = 0; i < 13; i++)
+    for (int i = 0; i < kCombos; i++)
         if (g_keys[i] == key) return i;
-    for (int i = 0; i < 13; i++)
+    for (int i = 0; i < kCombos; i++)
         if (!g_keys[i]) {
             g_keys[i] = key;
             char kb[16];
             silk::log("input: keyboard %s -> hold L3 + press %s", key_name(key, kb), kButtonNames[i]);
-            rt_console("Keyboard %s = hold L3 + press %s", key_name(key, kb), kButtonNames[i]);
             return i;
         }
     return -1;
@@ -309,7 +336,16 @@ bool key_query(int32_t key, int kind) {  // 0 held, 1 down, 2 up
 }
 }  // namespace
 
-void rt_input_frame() {}
+// "1 = L3+R, F11 = L3+ZR" for every keyboard key a mod has asked about so far
+void rt_key_combos(char *out, int cap) {
+    int n = 0;
+    out[0] = 0;
+    for (int i = 0; i < kCombos && n < cap - 40; i++) {
+        if (!g_keys[i]) continue;
+        char kb[16];
+        n += silk::snfmt(out + n, cap - n, "%s%s = L3+%s", n ? ", " : "", key_name(g_keys[i], kb), kButtonNames[i]);
+    }
+}
 
 bool shim_UnityEngine_Input__GetKey__UnityEngine_KeyCode(int32_t key) { return key_query(key, 0); }
 bool shim_UnityEngine_Input__GetKeyDown__UnityEngine_KeyCode(int32_t key) { return key_query(key, 1); }

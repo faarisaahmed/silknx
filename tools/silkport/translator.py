@@ -876,6 +876,17 @@ class CallEmitter:
             emu = tr.coll.call(c, thisx, argx)
             if emu is not None:
                 return emu, None
+            # in-place constructor (`ldloca; ...; call .ctor`): it just stores its arguments. Inlined even for
+            # instantiations the game has, since it may not have compiled their constructor.
+            if key.startswith(('System.Nullable`', 'System.ValueTuple`')) and thisx is not None and \
+                    c['name'] == '.ctor':
+                names = [cid(f.name) for f in tr.u.get(key).fields if not f.static and not f.literal]
+                p = f'({ts.cty(c["owner"])}*)({thisx})'
+                if key.startswith('System.Nullable`'):
+                    stores = [f'({p})->{names[0]} = true', f'({p})->{names[1]} = {argx[0]}']
+                else:
+                    stores = [f'({p})->{n} = {a}' for n, a in zip(names, argx)]
+                return f'({", ".join(stores)}, (void)0)', None
             # KeyValuePair's accessors are plain field reads with one layout for every instantiation: inline them
             # (the game only compiled the instantiations it uses itself; others throw ExecutionEngineException)
             if key.startswith(('System.Nullable`', G_KVP, 'System.ValueTuple`')) and thisx is not None and \
@@ -1144,9 +1155,13 @@ class CallEmitter:
             self.proto(shim, dict(c, ret=owner if not ts.is_vt(owner) else owner), len(extra), with_this=False)
             return (lambda v: [f'{v} = {shim}({", ".join(argx + extra)});']), owner
         td = tr.u.get(key)
-        if key.startswith('System.ValueTuple`') and ts.is_vt(owner) and (origin != 'game' or not tr.coll.native(owner)):
-            fields = [f for f in td.fields if not f.static and not f.literal]
-            assigns = [f'{{v}}.{cid(f.name)} = {a};' for f, a in zip(fields, argx)]
+        if key.startswith(('System.ValueTuple`', 'System.Nullable`')) and ts.is_vt(owner):
+            # the constructor just stores its arguments (inlined: the game may not have compiled it for this T)
+            fields = [cid(f.name) for f in td.fields if not f.static and not f.literal]
+            if key.startswith('System.Nullable`'):
+                assigns = [f'{{v}}.{fields[0]} = true;', f'{{v}}.{fields[1]} = {argx[0]};']
+            else:
+                assigns = [f'{{v}}.{n} = {a};' for n, a in zip(fields, argx)]
             return (lambda v: [f'{v} = {ct}{{}};'] + [a.replace('{v}', v) for a in assigns]), owner
         if origin == 'game' and owner[0] == 'gi':
             emu = tr.coll.construct(c, argx)

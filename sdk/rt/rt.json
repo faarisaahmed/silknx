@@ -84,6 +84,77 @@
       "name": "CP_OnGUI",
       "method": "CodeProfiler::OnGUI",
       "argc": 0
+    },
+    {
+      "name": "CU_BI_mousePresent",
+      "method": "UnityEngine.EventSystems.BaseInput::get_mousePresent"
+    },
+    {
+      "name": "CU_BI_GetMouseButton",
+      "method": "UnityEngine.EventSystems.BaseInput::GetMouseButton"
+    },
+    {
+      "name": "CU_BI_GetMouseButtonDown",
+      "method": "UnityEngine.EventSystems.BaseInput::GetMouseButtonDown"
+    },
+    {
+      "name": "CU_BI_GetMouseButtonUp",
+      "method": "UnityEngine.EventSystems.BaseInput::GetMouseButtonUp"
+    },
+    {
+      "name": "CU_BI_mousePosition",
+      "method": "UnityEngine.EventSystems.BaseInput::get_mousePosition"
+    },
+    {
+      "name": "CU_BI_mouseScrollDelta",
+      "method": "UnityEngine.EventSystems.BaseInput::get_mouseScrollDelta"
+    },
+    {
+      "name": "CU_In_mousePresent",
+      "method": "UnityEngine.Input::get_mousePresent"
+    },
+    {
+      "name": "CU_In_GetMouseButton",
+      "method": "UnityEngine.Input::GetMouseButton"
+    },
+    {
+      "name": "CU_In_GetMouseButtonDown",
+      "method": "UnityEngine.Input::GetMouseButtonDown"
+    },
+    {
+      "name": "CU_In_GetMouseButtonUp",
+      "method": "UnityEngine.Input::GetMouseButtonUp"
+    },
+    {
+      "name": "CU_In_mousePosition",
+      "method": "UnityEngine.Input::get_mousePosition"
+    },
+    {
+      "name": "CU_In_mouseScrollDelta",
+      "method": "UnityEngine.Input::get_mouseScrollDelta"
+    },
+    {
+      "name": "CU_ActionSet_Update",
+      "method": "InControl.PlayerActionSet::Update"
+    },
+    {
+      "name": "CU_BI_GetButtonDown",
+      "method": "UnityEngine.EventSystems.BaseInput::GetButtonDown"
+    },
+    {
+      "name": "CU_BI_GetAxisRaw",
+      "method": "UnityEngine.EventSystems.BaseInput::GetAxisRaw"
+    },
+    {
+      "name": "CU_SIM_ProcessMouseEvent",
+      "method": "UnityEngine.EventSystems.StandaloneInputModule::ProcessMouseEvent",
+      "params": [
+        "int"
+      ]
+    },
+    {
+      "name": "CU_ES_Update",
+      "method": "UnityEngine.EventSystems.EventSystem::Update"
     }
   ],
   "methods": [
@@ -638,6 +709,52 @@
         "string",
         "string"
       ]
+    },
+    {
+      "name": "OneAxisInputControl_get_Value",
+      "method": "InControl.OneAxisInputControl::get_Value"
+    },
+    {
+      "name": "Event_set_type",
+      "method": "UnityEngine.Event::set_type"
+    },
+    {
+      "name": "Event_set_mousePosition",
+      "method": "UnityEngine.Event::set_mousePosition"
+    },
+    {
+      "name": "Event_set_delta",
+      "method": "UnityEngine.Event::set_delta"
+    },
+    {
+      "name": "Texture2D_ctor_fmt_mip",
+      "method": "UnityEngine.Texture2D::.ctor",
+      "params": [
+        "int",
+        "int",
+        "UnityEngine.TextureFormat",
+        "bool"
+      ]
+    },
+    {
+      "name": "Object_set_hideFlags",
+      "method": "UnityEngine.Object::set_hideFlags"
+    },
+    {
+      "name": "Time_get_frameCount",
+      "method": "UnityEngine.Time::get_frameCount"
+    },
+    {
+      "name": "EventSystem_get_current",
+      "method": "UnityEngine.EventSystems.EventSystem::get_current"
+    },
+    {
+      "name": "Cursor_get_lockState",
+      "method": "UnityEngine.Cursor::get_lockState"
+    },
+    {
+      "name": "Cursor_set_lockState",
+      "method": "UnityEngine.Cursor::set_lockState"
     }
   ],
   "fields": [
@@ -688,6 +805,10 @@
     {
       "name": "Delegate_extra_arg",
       "field": "System.Delegate::extra_arg"
+    },
+    {
+      "name": "PlayerActionSet_Enabled",
+      "field": "InControl.PlayerActionSet::<Enabled>k__BackingField"
     }
   ]
 }

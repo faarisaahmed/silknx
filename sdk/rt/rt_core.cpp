@@ -838,12 +838,30 @@ const char *g_rt_context;  // what mod code is running (for error messages)
 int g_rt_trace_budget = 3000000;
 #endif
 
+// true the first time a message is seen (on-screen errors are shown once; the log gets every one)
+static bool first_time(const char *a, const char *b) {
+    static uint32_t seen[512];
+    uint32_t h = 2166136261u;
+    const char *parts[] = {a, b};
+    for (const char *s : parts)
+        for (; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+    if (!h) h = 1;
+    for (uint32_t i = 0, k = h % 512; i < 512; i++, k = (k + 1) % 512) {
+        if (seen[k] == h) return false;
+        if (!seen[k]) {
+            seen[k] = h;
+            return true;
+        }
+    }
+    return false;
+}
+
 void rt_report_exception(const char *where) {
     char d[400];
     describe_exception(rt_exception(), d, sizeof(d));
     const char *ctx = g_rt_context ? g_rt_context : where;
     silk::log("exception in %s: %s", ctx, d);
-    rt_console("error in %s: %s", ctx, d);
+    if (first_time(ctx, d)) rt_console("error in %s: %s", ctx, d);
 }
 
 // ---------------------------------------------------------------- logging helpers
@@ -855,7 +873,7 @@ obj rt_object_to_string(obj o) {
     return ((obj(*)(obj, const void *))rt_vfn(o, &g_tostring_site))(o, g_tostring_site.mi);
 }
 
-void rt_log_obj(const char *prefix, obj msg, bool on_screen) {
+void rt_log_obj(const char *prefix, obj msg, bool on_screen, bool once) {
     char buf[600];
     if (!msg) {
         silk::log("%s(null)", prefix);
@@ -872,7 +890,7 @@ void rt_log_obj(const char *prefix, obj msg, bool on_screen) {
     }
     rt_str_to_utf8(s, buf, sizeof(buf));
     silk::log("%s%s", prefix, buf);
-    if (on_screen) rt_console("%s%s", prefix, buf);
+    if (on_screen && (!once || first_time(prefix, buf))) rt_console("%s%s", prefix, buf);
 }
 
 // ---------------------------------------------------------------- boot

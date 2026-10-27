@@ -322,7 +322,7 @@ obj rt_new_generic_instance(const char *aqn);
 obj rt_find_method(obj type, obj name, obj param_types);
 
 // logging
-void rt_log_obj(const char *prefix, obj msg, bool on_screen = true);
+void rt_log_obj(const char *prefix, obj msg, bool on_screen = true, bool once = false);
 void rt_console(const char *fmt, ...);
 
 template <typename To, typename From>
