@@ -183,8 +183,26 @@ def build(plugins, config=None, name='SilkNX', install=True, atmosphere=None, on
         shutil.copytree(out, dst)
         print(f'Installed into Ryujinx: {dst}')
     if atmosphere:
-        dst = os.path.join(os.path.abspath(atmosphere), 'atmosphere', 'contents', platform_paths.TITLE_ID.upper())
-        shutil.rmtree(dst, ignore_errors=True)
-        shutil.copytree(out, dst)
-        print(f'Atmosphere files written to: {dst}  (copy the "atmosphere" folder to your SD card)')
+        export_atmosphere(out, os.path.abspath(atmosphere), name)
     return out
+
+
+def export_atmosphere(out, dest, name='SilkNX'):
+    """Lay out an SD card for Atmosphere: module + romfs under contents/<TID>, IPS under exefs_patches."""
+    import platform_paths
+    sd = os.path.join(dest, 'atmosphere')
+    contents = os.path.join(sd, 'contents', platform_paths.TITLE_ID.upper())
+    patches = os.path.join(sd, 'exefs_patches', name)
+    shutil.rmtree(contents, ignore_errors=True)
+    shutil.rmtree(patches, ignore_errors=True)
+    os.makedirs(os.path.join(contents, 'exefs'))
+    os.makedirs(patches)
+    shutil.copy(os.path.join(out, 'exefs', 'subsdk9'), os.path.join(contents, 'exefs', 'subsdk9'))
+    for f in os.listdir(os.path.join(out, 'exefs')):
+        if f.endswith('.ips'):
+            shutil.copy(os.path.join(out, 'exefs', f), os.path.join(patches, f))
+    if os.path.isdir(os.path.join(out, 'romfs')):
+        shutil.copytree(os.path.join(out, 'romfs'), os.path.join(contents, 'romfs'))
+    zip_path = shutil.make_archive(os.path.join(dest, 'SilkNX-atmosphere'), 'zip', dest, 'atmosphere')
+    print(f'Atmosphere SD files: {sd}')
+    print(f'  (also zipped: {zip_path}) - copy/extract the "atmosphere" folder to the root of your SD card')

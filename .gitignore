@@ -20,3 +20,4 @@ config/*
 pcmods/
 testplugins*/
 .DS_Store
+switch-sd/

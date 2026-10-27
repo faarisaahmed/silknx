@@ -8,7 +8,7 @@
 Options for the default command:
   --plugins DIR      folder with mods (default: plugins/)
   --config DIR       BepInEx config folder with .cfg files (default: config/)
-  --atmosphere DIR   also write an Atmosphere SD-card folder into DIR (real Switch, experimental)
+  --atmosphere [DIR] also make files for a modded Switch (Atmosphere); default DIR: switch-sd/
   --no-install       build only
 """
 import argparse
@@ -25,7 +25,7 @@ def main():
     ap.add_argument('command', nargs='?', default='build', choices=['build', 'setup', 'uninstall', 'help'])
     ap.add_argument('--plugins', default=os.path.join(ROOT, 'plugins'))
     ap.add_argument('--config', default=os.path.join(ROOT, 'config'))
-    ap.add_argument('--atmosphere')
+    ap.add_argument('--atmosphere', nargs='?', const=os.path.join(ROOT, 'switch-sd'))
     ap.add_argument('--no-install', action='store_true')
     ap.add_argument('--nsp')
     ap.add_argument('--keys')
@@ -58,7 +58,13 @@ def main():
         return
     build(a.plugins, a.config if os.path.isdir(a.config) else None, install=not a.no_install,
           atmosphere=a.atmosphere, only=a.only)
-    print('\nDone! Start Silksong in Ryujinx. Mod messages appear in the top-left corner of the screen.')
+    where = []
+    if not a.no_install:
+        where.append('Ryujinx')
+    if a.atmosphere:
+        where.append('your Switch (after copying the atmosphere folder to the SD card)')
+    if where:
+        print(f'\nDone! Start Silksong in {" or ".join(where)}. Mod messages appear in the top-left corner.')
 
 
 if __name__ == '__main__':

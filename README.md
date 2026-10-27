@@ -1,7 +1,7 @@
 # SilkNX: PC Silksong mods on Nintendo Switch
 
 SilkNX converts **BepInEx mods for Hollow Knight: Silksong (PC)** so they run on the **Switch version** of the
-game, in the Ryujinx emulator (and experimentally on a modded Switch).
+game, on a **modded Switch (Atmosphère)** or in the **Ryujinx** emulator.
 
 Drop your mod `.dll` files into a folder, run one command, start the game.
 
@@ -86,13 +86,29 @@ SilkNX translates each mod's compiled C# into native Switch code and emulates th
 
 Tested so far: **ShowDamage HealthBar**, **Skip Intro**, **Toggle HUD**, **MapMod**.
 
-## Real Switch (experimental, untested)
+## Modded Switch (Atmosphère)
 
-```sh
-python3 silknx.py --atmosphere ~/Desktop/sd
-```
+1. Do the install above on your computer (setup needs the NSP + `prod.keys` dumped from your Switch).
+2. Put mods in `plugins` and run:
 
-Copy the generated `atmosphere` folder to the root of your SD card (Atmosphère CFW).
+   ```sh
+   python3 silknx.py --atmosphere
+   ```
+
+3. Copy the `atmosphere` folder from `silknx/switch-sd/` to the **root of your SD card** (merge with the
+   existing folder), or extract `switch-sd/SilkNX-atmosphere.zip` there.
+4. Start Silksong. To remove the mods, delete `atmosphere/contents/010013C00E930000` and
+   `atmosphere/exefs_patches/SilkNX` from the SD card.
+
+> Status: built to Atmosphère's documented layout, but not yet confirmed on real hardware. If you try it,
+> please open an issue saying whether it worked.
+
+## Game version
+
+The mods are built for the exact version of the game in the NSP you gave `setup`. Your Switch/Ryujinx must
+run **that same version**. If you install a game update, dump the update too and run setup again
+(update NSPs are not supported yet; this is being worked on). If mods silently do nothing, a version mismatch
+is the most likely cause.
 
 ## Troubleshooting
 
