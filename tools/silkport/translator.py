@@ -291,6 +291,20 @@ class Translator:
             if static:
                 tr = self.type_ref(owner_sig)
                 return True, fsig, lambda o: f'(*({ct}*)((uint8_t*)rt_game_statics({tr}) + {off:#x}))'
+            if self.ts.is_vt(owner_sig) and owner_sig[0] == 'gi':
+                # Generic struct instance (ValueTuple<string, string>, KeyValuePair<K, V>...): the dump only has
+                # the open definition's offsets, so use the members of our computed layout instead.
+                s = self.ts.cty(owner_sig)
+                fname = cid(name)
+
+                def lv_gi(o):
+                    v, sv = o
+                    if sv.ct.endswith('*') or sv.ct == 'intptr_t':
+                        return f'(({s}*){v})->{fname}'
+                    if sv.ct == OBJ:  # boxed
+                        return f'(({s}*)((uint8_t*)rt_nc({v}) + 0x10))->{fname}'
+                    return f'(*({s}*)&{v}).{fname}'
+                return False, fsig, lv_gi
             if self.ts.is_vt(owner_sig):
                 s = self.ts.cty(owner_sig)
 
@@ -809,6 +823,15 @@ class CallEmitter:
         if op == 'newobj':
             return self.newobj(mt, c, args, argx, origin)
         thisx = None
+        if this is not None and constrained is not None and tr.coll.emulated(norm(constrained)):
+            # `constrained. List<ModStruct>.Enumerator; callvirt IDisposable.Dispose` (foreach cleanup) and
+            # friends: call the emulated enumerator directly instead of boxing a struct the game doesn't have
+            ct_sig = norm(constrained)
+            emu = tr.coll.call(dict(c, owner=ct_sig, key=ct_sig[1]), this[0], argx)
+            if emu is not None:
+                return emu, None
+            if c['name'] == 'Dispose':
+                return '(void)0', None
         if this is not None:
             tv, tsv = this
             if constrained is not None:
@@ -853,8 +876,10 @@ class CallEmitter:
             emu = tr.coll.call(c, thisx, argx)
             if emu is not None:
                 return emu, None
-            if key.startswith(('System.Nullable`', G_KVP, 'System.ValueTuple`')) and not tr.coll.native(c['owner']) \
-                    and thisx is not None:
+            # KeyValuePair's accessors are plain field reads with one layout for every instantiation: inline them
+            # (the game only compiled the instantiations it uses itself; others throw ExecutionEngineException)
+            if key.startswith(('System.Nullable`', G_KVP, 'System.ValueTuple`')) and thisx is not None and \
+                    (key.startswith(G_KVP) or not tr.coll.native(c['owner'])):
                 fields = [f for f in tr.u.get(key).fields if not f.static and not f.literal]
                 fx = {cid(f.name) for f in fields}
                 p = f'({ts.cty(c["owner"])}*)({thisx})'
@@ -868,6 +893,11 @@ class CallEmitter:
                                     for m in c['margs']):
             tr.report.add('error', f'unsupported API {self.describe(c)} with a mod-defined type argument '
                                    f'(used by {where}) [{self.shim_name(c)}]')
+            return self.unsupported_call(c, where), None
+        if origin == 'game' and (tr.coll.needs_linq_emulation(c) or tr.coll.linq_missing(c)):
+            expr = tr.coll.linq(c, argx)
+            if expr is not None:
+                return expr, None
             return self.unsupported_call(c, where), None
         if origin == 'game':
             allx = self.guard_enum_args(c, allx, where)
@@ -890,6 +920,14 @@ class CallEmitter:
             virt = op == 'callvirt' and dm['virtual'] and not self.sealed_game(key)
             receiver_may_be_mod = this is not None and self.receiver_may_be_mod(this[1], c)
             if virt or (receiver_may_be_mod and dm['virtual']):
+                emu = tr.coll.iface(c, allx[1:])
+                if emu is not None:
+                    # the receiver may be a converted collection seen through an interface: decide at runtime
+                    native = self.virtual_call(mt, c, '__r', ['__r'] + allx[1:], ft, c['def'], dm)
+                    emu = emu.replace('{r}', '__r')
+                    if ts.cty(c['ret']) == 'void':
+                        return f'({{ obj __r = {allx[0]}; if (silk_coll::is_emu(__r)) {emu}; else {native}; }})', None
+                    return f'({{ obj __r = {allx[0]}; silk_coll::is_emu(__r) ? {emu} : {native}; }})', None
                 return self.virtual_call(mt, c, thisx, allx, ft, c['def'], dm), None
             if c['otargs'] or c['margs'] or not dm['rva']:
                 site = self.reflect_site(c)

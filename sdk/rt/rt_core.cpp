@@ -117,6 +117,7 @@ void *g_rt_objarr_klass;  // == g_mod_klass (inline checks in rt.h)
 bool rt_ready() { return g_ready; }
 
 obj rt_new_raw_storage(intptr_t slots) { return raw_storage(slots); }
+void *rt_mod_klass() { return g_mod_klass; }
 
 void *rt_root_alloc(size_t bytes) {
     bytes = (bytes + 7) & ~(size_t)7;
@@ -544,6 +545,10 @@ void *rt_vfn(obj o, rt_vsite *site) {
     split_desc(site->desc, parts);
     if (!parts[3][0]) {  // not a generic method: use the class's own dispatch tables
         if (const VirtualInvokeData *v = vtable_entry(o->klass, site)) {
+#ifdef SILKNX_TRACE_ALL
+            silk::log("vfn: %s on %s -> main+%lx", site->desc, *(const char **)((uint8_t *)o->klass + KLASS_NAME),
+                      (uint64_t)((uintptr_t)v->fp - silk_main_base));
+#endif
             e = {o->klass, site, v->fp, v->mi};
             site->klass = o->klass;
             site->fp = v->fp;
@@ -850,11 +855,11 @@ obj rt_object_to_string(obj o) {
     return ((obj(*)(obj, const void *))rt_vfn(o, &g_tostring_site))(o, g_tostring_site.mi);
 }
 
-void rt_log_obj(const char *prefix, obj msg) {
+void rt_log_obj(const char *prefix, obj msg, bool on_screen) {
     char buf[600];
     if (!msg) {
         silk::log("%s(null)", prefix);
-        rt_console("%s(null)", prefix);
+        if (on_screen) rt_console("%s(null)", prefix);
         return;
     }
     obj s = msg;
@@ -867,7 +872,7 @@ void rt_log_obj(const char *prefix, obj msg) {
     }
     rt_str_to_utf8(s, buf, sizeof(buf));
     silk::log("%s%s", prefix, buf);
-    rt_console("%s%s", prefix, buf);
+    if (on_screen) rt_console("%s%s", prefix, buf);
 }
 
 // ---------------------------------------------------------------- boot
@@ -1029,5 +1034,25 @@ void rt_selftest_gc() {
     holder->klass = (decltype(holder->klass))g_objarr_klass;
     silk::log("selftest gc: unreferenced canaries reused=%d (want >0); referenced from a long[]-tagged object[] "
               "reused=%d (want 0)", control, swapped);
+
+    // Block-compressed textures with dimensions that are not multiples of the block size (most mod sprites).
+    struct Case { int32_t w, h, fmt, bw, bh; const char *name; };
+    static const Case cases[] = {{76, 332, 12, 4, 4, "DXT5 76x332"}, {75, 331, 48, 4, 4, "ASTC4x4 75x331"},
+                                 {75, 331, 50, 6, 6, "ASTC6x6 75x331"}, {75, 331, 51, 8, 8, "ASTC8x8 75x331"}};
+    obj t2d = get_type("UnityEngine.Texture2D, UnityEngine.CoreModule");
+    for (const Case &cs : cases) {
+        obj tex = rt_call<obj>(FormatterServices_GetUninitializedObject, t2d);
+        bool ok = false;
+        RT_GUARD_BEGIN
+        ((void (*)(obj, int32_t, int32_t, int32_t, bool, const void *))(silk_main_base + 0x5b3ef30))(
+            tex, cs.w, cs.h, cs.fmt, false, nullptr);
+        int32_t blocks = ((cs.w + cs.bw - 1) / cs.bw) * ((cs.h + cs.bh - 1) / cs.bh);
+        obj bytes = rt_call<obj>(Array_CreateInstance, get_type("System.Byte, mscorlib"), blocks * 16);
+        ((void (*)(obj, obj, const void *))(silk_main_base + 0x5b3ff20))(tex, bytes, nullptr);
+        ((void (*)(obj, bool, bool, const void *))(silk_main_base + 0x5b40060))(tex, false, true, nullptr);
+        ok = true;
+        RT_GUARD_END
+        silk::log("selftest %s: %s", cs.name, ok ? "accepted" : "rejected");
+    }
 }
 #endif

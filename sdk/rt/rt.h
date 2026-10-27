@@ -315,13 +315,14 @@ obj rt_new_string_array(int32_t n);
 void *rt_string_klass();
 obj rt_object_to_string(obj o);  // virtual ToString() of a game object
 obj rt_native_enum(obj o, const char *where);
-obj rt_new_raw_storage(intptr_t slots);  // GC-traced slots that Unity's liveness scan skips
+obj rt_new_raw_storage(intptr_t slots);
+void *rt_mod_klass();  // class pointer of converted objects / raw storage  // GC-traced slots that Unity's liveness scan skips
 obj rt_delegate_bound_target(obj d);  // m_target of a game delegate (guarded thunks)  // emulated collection -> object[] for game code
 obj rt_new_generic_instance(const char *aqn);
 obj rt_find_method(obj type, obj name, obj param_types);
 
 // logging
-void rt_log_obj(const char *prefix, obj msg);
+void rt_log_obj(const char *prefix, obj msg, bool on_screen = true);
 void rt_console(const char *fmt, ...);
 
 template <typename To, typename From>

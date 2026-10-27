@@ -309,6 +309,7 @@ struct DictObj : ModObj {
     obj buckets, entries;
     int32_t count, capacity, free_list, free_count, version;
     int32_t ref_keys;  // keys are object references
+    int32_t entry_size, key_off, val_off;  // Entry<K,V> layout, for code that only knows K or V
 };
 
 template <typename K, typename V>
@@ -356,6 +357,9 @@ obj Dict_new_d(const rt_modtype *desc, int32_t cap) {
     o->entries = buffer(sizeof(Entry<K, V>) * o->capacity);
     o->free_list = -1;
     o->ref_keys = __is_same(K, obj);
+    o->entry_size = (int32_t)sizeof(Entry<K, V>);
+    o->key_off = (int32_t)__builtin_offsetof(Entry<K, V>, key);
+    o->val_off = (int32_t)__builtin_offsetof(Entry<K, V>, value);
     return d;
 }
 
@@ -551,6 +555,10 @@ template <typename K, typename V>
 KVP<K, V> DictEnum_get_Current(DictEnum<K, V> *e) { return e->current; }
 template <typename K, typename V>
 void DictEnum_Dispose(DictEnum<K, V> *) {}
+template <typename K, typename V>
+void DictEnum_Dispose(KeyEnum<K, V> *) {}
+template <typename K, typename V>
+void DictEnum_Dispose(ValEnum<K, V> *) {}
 
 template <typename K, typename V>
 K KVP_get_Key(KVP<K, V> *p) { return p->key; }
@@ -663,6 +671,281 @@ bool Set_IsSupersetOf(obj s, obj other) {
     for (int32_t i = 0; Dict_next<T, Unit>(other, i);)
         if (!Set_Contains<T>(s, entries<T, Unit>(other)[i - 1].key)) return false;
     return true;
+}
+
+// ---------------------------------------------------------------- interface-typed access
+// Code that sees a converted collection only as IEnumerable<T> / ICollection<T> / IList<T> / IDictionary<K,V>
+// (e.g. a List<ModType> passed as IReadOnlyList<ModType>) is routed here at runtime; the call site knows T.
+extern rt_modtype d_iter;
+struct IterObj : ModObj {  // IEnumerator<T> over any converted collection
+    obj coll;
+    int32_t index, version;
+};
+
+inline bool is_emu(obj o) {
+    if (!o || !rt_is_mod(o)) return false;
+    const rt_modtype *d = ((ModObj *)o)->desc;
+    return d == &d_list || d == &d_dict || d == &d_set || d == &d_keys || d == &d_values || d == &d_iter;
+}
+inline obj backing_dict(obj c) {  // dictionary behind a dict/set/view, or null for lists
+    const rt_modtype *d = ((ModObj *)c)->desc;
+    if (d == &d_keys || d == &d_values) return ((CollView *)c)->dict;
+    return d == &d_list ? nullptr : c;
+}
+inline int32_t version_of(obj c) {
+    obj d = backing_dict(c);
+    return d ? ((DictObj *)d)->version : ((ListObj *)c)->version;
+}
+obj Iter_new(obj coll);
+bool Iter_MoveNext(obj it);
+int32_t Coll_Count(obj c);
+[[noreturn]] void coll_unsupported(obj c, const char *what);
+
+template <typename T>
+T Iter_Current(obj it) {
+    auto *t = (IterObj *)rt_nc(it);
+    obj c = t->coll;
+    const rt_modtype *d = ((ModObj *)c)->desc;
+    if (d == &d_list) return items<T>(c)[t->index - 1];
+    auto *o = (DictObj *)backing_dict(c);
+    uint8_t *e = data(o->entries) + (size_t)(t->index - 1) * o->entry_size;
+    return *(T *)(e + (d == &d_values ? o->val_off : o->key_off));
+}
+template <typename K, typename V>
+KVP<K, V> Iter_CurrentKVP(obj it) {  // IEnumerator<KeyValuePair<K,V>> over a dictionary
+    auto *t = (IterObj *)rt_nc(it);
+    Entry<K, V> &e = entries<K, V>(t->coll)[t->index - 1];
+    return KVP<K, V>{e.key, e.value};
+}
+obj Iter_CurrentObj(obj it);  // non-generic IEnumerator.Current (reference elements)
+
+template <typename T>
+T Coll_Item(obj c, int32_t i) {
+    if (((ModObj *)c)->desc != &d_list) coll_unsupported(c, "indexer");
+    return List_get_Item<T>(c, i);
+}
+template <typename T>
+void Coll_SetItem(obj c, int32_t i, T v) {
+    if (((ModObj *)c)->desc != &d_list) coll_unsupported(c, "indexer");
+    List_set_Item<T>(c, i, v);
+}
+template <typename T>
+bool Coll_Contains(obj c, T v) {
+    const rt_modtype *d = ((ModObj *)c)->desc;
+    if (d == &d_list) return List_Contains<T>(c, v);
+    if (d == &d_set) return Set_Contains<T>(c, v);
+    coll_unsupported(c, "Contains");
+}
+template <typename T>
+bool Coll_Add(obj c, T v) {
+    const rt_modtype *d = ((ModObj *)c)->desc;
+    if (d == &d_list) {
+        List_Add<T>(c, v);
+        return true;
+    }
+    if (d == &d_set) return Set_Add<T>(c, v);
+    coll_unsupported(c, "Add");
+}
+template <typename T>
+bool Coll_Remove(obj c, T v) {
+    const rt_modtype *d = ((ModObj *)c)->desc;
+    if (d == &d_list) return List_Remove<T>(c, v);
+    if (d == &d_set) return Set_Remove<T>(c, v);
+    coll_unsupported(c, "Remove");
+}
+template <typename T>
+void Coll_Clear(obj c) {
+    const rt_modtype *d = ((ModObj *)c)->desc;
+    if (d == &d_list) return List_Clear<T>(c);
+    if (d == &d_set) return Set_Clear<T>(c);
+    coll_unsupported(c, "Clear");
+}
+template <typename T>
+int32_t Coll_IndexOf(obj c, T v) {
+    if (((ModObj *)c)->desc != &d_list) coll_unsupported(c, "IndexOf");
+    return List_IndexOf<T>(c, v);
+}
+
+// ---------------------------------------------------------------- LINQ over element types the game lacks
+// Enumerable.X<T> with T a mod-defined struct (or another type the Switch build never instantiated) can't run
+// natively. These eager equivalents take any source: a converted collection, a mod-struct array, or a native
+// IEnumerable; sequence results are converted List<T>s.
+obj src_enumerator(obj src);  // native IEnumerable.GetEnumerator()
+bool src_movenext(obj e);     // native IEnumerator.MoveNext()
+obj src_current(obj e);       // native IEnumerator.Current (boxed for value types)
+bool is_struct_array(obj o);  // mod-struct array: raw storage with the element count tagged in `bounds`
+
+template <typename T>
+inline T unbox_as(obj o) {
+    if constexpr (__is_same(T, obj)) {
+        return o;
+    } else {
+        return *(T *)((uint8_t *)rt_nc(o) + 0x10);
+    }
+}
+
+template <typename T, typename F>
+void for_each(obj src, F f) {
+    rt_nc(src);
+    if (is_emu(src)) {
+        obj it = Iter_new(src);
+        while (Iter_MoveNext(it))
+            if (!f(Iter_Current<T>(it))) return;
+        return;
+    }
+    if (is_struct_array(src)) {
+        intptr_t n = (intptr_t)((uintptr_t)((Il2CppArray *)src)->bounds >> 16);
+        T *p = (T *)((uint8_t *)src + 0x20);
+        for (intptr_t i = 0; i < n; i++)
+            if (!f(p[i])) return;
+        return;
+    }
+    obj e = src_enumerator(src);
+    while (src_movenext(e))
+        if (!f(unbox_as<T>(src_current(e)))) return;
+}
+
+template <typename T>
+int32_t Linq_Count(obj src) {
+    int32_t n = 0;
+    for_each<T>(src, [&](const T &) { return ++n, true; });
+    return n;
+}
+template <typename T>
+int32_t Linq_CountP(obj src, obj pred) {
+    int32_t n = 0;
+    for_each<T>(src, [&](const T &v) { return n += call_delegate<bool>(pred, v) ? 1 : 0, true; });
+    return n;
+}
+template <typename T>
+bool Linq_Any(obj src) {
+    bool r = false;
+    for_each<T>(src, [&](const T &) { return r = true, false; });
+    return r;
+}
+template <typename T>
+bool Linq_AnyP(obj src, obj pred) {
+    bool r = false;
+    for_each<T>(src, [&](const T &v) { return r = call_delegate<bool>(pred, v), !r; });
+    return r;
+}
+template <typename T>
+bool Linq_All(obj src, obj pred) {
+    bool r = true;
+    for_each<T>(src, [&](const T &v) { return r = call_delegate<bool>(pred, v), r; });
+    return r;
+}
+template <typename T>
+obj Linq_Where(obj src, obj pred) {
+    obj l = List_new<T>(4);
+    for_each<T>(src, [&](const T &v) {
+        if (call_delegate<bool>(pred, v)) List_Add<T>(l, v);
+        return true;
+    });
+    return l;
+}
+template <typename T, typename R>
+obj Linq_Select(obj src, obj fn) {
+    obj l = List_new<R>(4);
+    for_each<T>(src, [&](const T &v) { return List_Add<R>(l, call_delegate<R>(fn, v)), true; });
+    return l;
+}
+template <typename T>
+obj Linq_ToList(obj src) {
+    obj l = List_new<T>(4);
+    for_each<T>(src, [&](const T &v) { return List_Add<T>(l, v), true; });
+    return l;
+}
+template <typename T>
+obj Linq_ToArray(obj src) {  // mod-struct array (see rt_new_array)
+    obj l = Linq_ToList<T>(src);
+    int32_t n = ((ListObj *)l)->size;
+    obj a = rt_new_raw_storage((intptr_t)(((size_t)n * sizeof(T) + 7) / 8 + 1));
+    ((Il2CppArray *)a)->bounds = (void *)(((uintptr_t)n << 16) | 1);
+    memcpy((uint8_t *)a + 0x20, items<T>(l), (size_t)n * sizeof(T));
+    return a;
+}
+template <typename T>
+obj Linq_Take(obj src, int32_t count) {
+    obj l = List_new<T>(4);
+    int32_t n = 0;
+    for_each<T>(src, [&](const T &v) {
+        if (n++ >= count) return false;
+        return List_Add<T>(l, v), true;
+    });
+    return l;
+}
+template <typename T>
+T Linq_First(obj src, obj pred, bool or_default) {
+    T r{};
+    bool found = false;
+    for_each<T>(src, [&](const T &v) {
+        if (pred && !call_delegate<bool>(pred, v)) return true;
+        return r = v, found = true, false;
+    });
+    if (!found && !or_default) coll_unsupported(src, "First() on an empty sequence");
+    return r;
+}
+int32_t compare_strings(obj a, obj b);  // String.CompareOrdinal
+template <typename K>
+inline int32_t linq_cmp(const K &a, const K &b) {
+    if constexpr (__is_same(K, obj)) {
+        return compare_strings(a, b);
+    } else {
+        return a < b ? -1 : (b < a ? 1 : 0);
+    }
+}
+template <typename T, typename K>
+obj Linq_OrderBy(obj src, obj key, bool descending) {  // stable
+    obj l = Linq_ToList<T>(src);
+    int32_t n = ((ListObj *)l)->size;
+    obj kb = buffer(sizeof(K) * (size_t)(n + 1));
+    K *keys = (K *)data(kb);
+    T *it = items<T>(l);
+    for (int32_t i = 0; i < n; i++) keys[i] = call_delegate<K>(key, it[i]);
+    for (int32_t i = 1; i < n; i++) {
+        T v = it[i];
+        K k = keys[i];
+        int32_t j = i - 1;
+        while (j >= 0 && (descending ? linq_cmp<K>(keys[j], k) < 0 : linq_cmp<K>(keys[j], k) > 0)) {
+            it[j + 1] = it[j];
+            keys[j + 1] = keys[j];
+            j--;
+        }
+        it[j + 1] = v;
+        keys[j + 1] = k;
+    }
+    return l;
+}
+template <typename T, typename R>
+R Linq_Max(obj src, obj sel) {
+    R best{};
+    bool any = false;
+    for_each<T>(src, [&](const T &v) {
+        R x = call_delegate<R>(sel, v);
+        if (!any || best < x) best = x;
+        return any = true, true;
+    });
+    if (!any) coll_unsupported(src, "Max() on an empty sequence");
+    return best;
+}
+template <typename T, typename R>
+R Linq_Min(obj src, obj sel) {
+    R best{};
+    bool any = false;
+    for_each<T>(src, [&](const T &v) {
+        R x = call_delegate<R>(sel, v);
+        if (!any || x < best) best = x;
+        return any = true, true;
+    });
+    if (!any) coll_unsupported(src, "Min() on an empty sequence");
+    return best;
+}
+template <typename T, typename R>
+R Linq_Sum(obj src, obj sel) {
+    R total{};
+    for_each<T>(src, [&](const T &v) { return total += call_delegate<R>(sel, v), true; });
+    return total;
 }
 
 }  // namespace silk_coll

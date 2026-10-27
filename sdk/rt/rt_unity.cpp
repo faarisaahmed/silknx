@@ -650,3 +650,165 @@ obj shim_UnityEngine_GUIContent___ctor__string_string(obj text, obj tooltip) {
     rt_call<void>(GUIContent_ctor_text_image_tooltip, c, text, (obj) nullptr, tooltip);
     return c;
 }
+
+// ======================================================================== textures
+// Mod PNGs are converted at build time (tools/silkport/textures.py): the PNG becomes a header-only stub with a
+// private 'snXa' chunk naming an ASTC file, which is uploaded directly (Switch memory budget, no decode).
+static bool astc_stub_path(obj bytes, char *out, size_t cap) {
+    if (!bytes) return false;
+    auto *a = (Il2CppArray *)bytes;
+    const uint8_t *b = (const uint8_t *)bytes + 0x20;
+    intptr_t n = (intptr_t)a->max_length;
+    static const uint8_t sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    if (n < 8 + 25 + 12 || memcmp(b, sig, 8) != 0) return false;
+    const uint8_t *c = b + 8 + 25;  // chunk after IHDR
+    uint32_t len = ((uint32_t)c[0] << 24) | ((uint32_t)c[1] << 16) | ((uint32_t)c[2] << 8) | c[3];
+    if (memcmp(c + 4, "snXa", 4) != 0 || len == 0 || len >= cap || 8 + 25 + 12 + (intptr_t)len > n) return false;
+    memcpy(out, c + 8, len);
+    out[len] = 0;
+    return true;
+}
+
+static bool load_astc(obj tex, const char *path, bool non_readable) {
+    obj data = rt_call<obj>(File_ReadAllBytes, rt_str(path));
+    auto *a = (Il2CppArray *)rt_nc(data);
+    const uint8_t *d = (const uint8_t *)data + 0x20;
+    if ((intptr_t)a->max_length < 12 || memcmp(d, "SNXA", 4) != 0) return false;
+    int32_t w = d[4] | (d[5] << 8), h = d[6] | (d[7] << 8), fmt = d[10];
+    rt_call<void>(Texture2D_Reinitialize_format, rt_nc(tex), w, h, fmt, false);
+    rt_call<void>(Texture2D_LoadRawTextureData_ptr, tex, (intptr_t)(d + 12), (int32_t)(a->max_length - 12));
+    rt_call<void>(Texture2D_Apply2, tex, false, non_readable);
+    return true;
+}
+
+bool shim_UnityEngine_ImageConversion__LoadImage__UnityEngine_Texture2D_byteArr(obj tex, obj bytes) {
+    char path[512];
+    if (astc_stub_path(bytes, path, sizeof(path))) return load_astc(tex, path, false);
+    return rt_call<bool>(ImageConversion_LoadImage, tex, bytes);
+}
+
+bool shim_UnityEngine_ImageConversion__LoadImage__UnityEngine_Texture2D_byteArr_bool(obj tex, obj bytes,
+                                                                                     bool non_readable) {
+    char path[512];
+    if (astc_stub_path(bytes, path, sizeof(path))) return load_astc(tex, path, non_readable);
+    bool ok = rt_call<bool>(ImageConversion_LoadImage, tex, bytes);
+    if (ok && non_readable) rt_call<void>(Texture2D_Apply2, tex, false, true);
+    return ok;
+}
+
+// ---------------------------------------------------------------- graphics wrappers stripped from the Switch build
+// Same struct name the converter emits for UnityEngine.Rect (name = V_ + sanitized type + hash of the type name).
+struct V_UnityEngine_Rect_79cb36 {
+    float x, y, width, height;
+};
+
+// Graphics.CopyTexture is gone entirely: report no CopyTexture support so mods take their Blit/DrawTexture path.
+int32_t shim_UnityEngine_SystemInfo__get_copyTextureSupport() { return 0; }
+
+bool shim_UnityEngine_RenderTexture__Create(obj self) {
+    return rt_call<bool>(RenderTexture_Internal_Create, rt_nc(self));
+}
+
+void shim_UnityEngine_Texture__IncrementUpdateCount(obj) {}  // change counter for editor tooling only
+
+// Graphics.DrawTexture(Rect, Texture): what Unity's wrapper does - full source rect, neutral GUI colour (0.5),
+// no borders, default material.
+void shim_UnityEngine_Graphics__DrawTexture__UnityEngine_Rect_UnityEngine_Texture(V_UnityEngine_Rect_79cb36 r,
+                                                                                    obj tex) {
+    struct Args {  // UnityEngine.Internal_DrawTextureArguments (unboxed layout from the dump)
+        float screen[4], source[4];
+        int32_t borders[4];
+        float border_colors[4][4], color[4], border_widths[4], corner_radiuses[4];
+        bool smooth_corners;
+        int32_t pass;
+        obj texture, mat;
+    };
+    static_assert(sizeof(Args) == 0xb8, "Internal_DrawTextureArguments layout");
+    Args a{};
+    a.screen[0] = r.x, a.screen[1] = r.y, a.screen[2] = r.width, a.screen[3] = r.height;
+    a.source[2] = a.source[3] = 1.0f;
+    for (auto &c : a.border_colors) c[3] = 1.0f;  // Color.black
+    for (float &c : a.color) c = 0.5f;
+    a.smooth_corners = true;
+    a.pass = -1;
+    a.texture = tex;
+    rt_call<void>(Graphics_Internal_DrawTexture, &a);
+}
+
+// ---------------------------------------------------------------- render texture budget
+// Mods written for PC build atlases at PC resolution in RenderTextures (4096^2 RGBA = 64 MB each), which the
+// Switch's memory budget can't hold. Large ones are created at a reduced scale (about the Switch build's own
+// asset density) while width/height keep reporting the size the mod asked for, so every coordinate it
+// derives (GL.LoadPixelMatrix, DrawTexture rects, normalized UVs) stays consistent - drawing just lands
+// downsampled.
+namespace {
+constexpr int32_t kMaxRtSide = 2048;
+struct ScaledRt {
+    obj rt;  // not GC-traced: validated with the instance id
+    int32_t id, w, h;
+};
+ScaledRt g_scaled_rt[256];
+obj g_rt_type;
+
+const ScaledRt *scaled_rt(obj o) {
+    if (!o) return nullptr;
+    for (const ScaledRt &s : g_scaled_rt)
+        if (s.rt == o && rt_call<int32_t>(Object_GetInstanceID, o) == s.id) return &s;
+    return nullptr;
+}
+
+obj new_render_texture(int32_t w, int32_t h, int32_t depth, int32_t fmt, int32_t rw, int nargs) {
+    if (!g_rt_type) {
+        g_rt_type = type_by_name("UnityEngine.RenderTexture, UnityEngine.CoreModule");
+        *(obj *)rt_root_alloc(8) = g_rt_type;
+    }
+    int32_t side = w > h ? w : h;
+    int32_t aw = w, ah = h;
+    if (side > kMaxRtSide) {
+        aw = (int32_t)((int64_t)w * kMaxRtSide / side);
+        ah = (int32_t)((int64_t)h * kMaxRtSide / side);
+        if (aw < 1) aw = 1;
+        if (ah < 1) ah = 1;
+    }
+    obj rt = rt_call<obj>(FormatterServices_GetUninitializedObject, g_rt_type);
+    if (nargs == 5) rt_call<void>(RenderTexture_ctor5, rt, aw, ah, depth, fmt, rw);
+    else if (nargs == 4) rt_call<void>(RenderTexture_ctor4, rt, aw, ah, depth, fmt);
+    else rt_call<void>(RenderTexture_ctor3, rt, aw, ah, depth);
+    if (aw != w || ah != h) {
+        static int slot;
+        g_scaled_rt[slot] = {rt, rt_call<int32_t>(Object_GetInstanceID, rt), w, h};
+        slot = (slot + 1) % 256;
+        static int logged;
+        if (logged++ < 8)
+            silk::log("mod RenderTexture %dx%d created as %dx%d (Switch memory budget)", w, h, aw, ah);
+    }
+    return rt;
+}
+
+rt_vsite s_tex_width = {0, -1, -1, false, "get_width", "UnityEngine.Texture, UnityEngine.CoreModule|get_width|||i",
+                        nullptr, nullptr, nullptr};
+rt_vsite s_tex_height = {0, -1, -1, false, "get_height",
+                         "UnityEngine.Texture, UnityEngine.CoreModule|get_height|||i", nullptr, nullptr, nullptr};
+int32_t tex_dim(obj self, bool width) {
+    rt_nc(self);
+    if (const ScaledRt *s = scaled_rt(self)) return width ? s->w : s->h;
+    rt_vsite *site = width ? &s_tex_width : &s_tex_height;
+    return ((int32_t(*)(obj, const void *))rt_vfn(self, site))(self, site->mi);
+}
+}  // namespace
+
+obj shim_UnityEngine_RenderTexture___ctor__int_int_int_UnityEngine_RenderTextureFormat_UnityEngine_RenderTextureReadWrite(
+    int32_t w, int32_t h, int32_t depth, int32_t fmt, int32_t rw) {
+    return new_render_texture(w, h, depth, fmt, rw, 5);
+}
+obj shim_UnityEngine_RenderTexture___ctor__int_int_int_UnityEngine_RenderTextureFormat(int32_t w, int32_t h,
+                                                                                       int32_t depth, int32_t fmt) {
+    return new_render_texture(w, h, depth, fmt, 0, 4);
+}
+obj shim_UnityEngine_RenderTexture___ctor__int_int_int(int32_t w, int32_t h, int32_t depth) {
+    return new_render_texture(w, h, depth, 0, 0, 3);
+}
+int32_t shim_UnityEngine_Texture__get_width(obj self) { return tex_dim(self, true); }
+int32_t shim_UnityEngine_Texture__get_height(obj self) { return tex_dim(self, false); }
+int32_t shim_UnityEngine_RenderTexture__get_width(obj self) { return tex_dim(self, true); }
+int32_t shim_UnityEngine_RenderTexture__get_height(obj self) { return tex_dim(self, false); }

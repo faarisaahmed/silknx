@@ -703,7 +703,7 @@ class MethodTranslator:
 
     def compare(self, op, a, sa, b, sb):
         flt = sa.ct in (R4, R8) or sb.ct in (R4, R8)
-        if op == 'ceq':
+        if op in ('ceq', 'ceq.un'):  # bne.un arrives as ceq.un: plain (in)equality; !(a == b) is also NaN-correct
             if sa.ct == OBJ or sb.ct == OBJ or sa.ct.endswith('*'):
                 return f'(void*){a} == (void*){b}'
             return f'{a} == {b}'

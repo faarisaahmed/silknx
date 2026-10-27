@@ -64,6 +64,43 @@ STRUCTS = {LIST + '/Enumerator': 'ListEnum', DICT + '/Enumerator': 'DictEnum', S
            KVP: 'KVP'}
 OWNERS = {k[0] for k in TABLE}
 
+# Interface-typed access to converted collections: (interface, method, #params) -> (helper, type args)
+# where type args is 'T' (element), 'KV' (dictionary key/value) or '' (none). '{r}' is the receiver.
+NG = 'System.Collections.'
+IFACE = {
+    (G + 'IEnumerable`1', 'GetEnumerator', 0): ('silk_coll::Iter_new({r})', ''),
+    (NG + 'IEnumerable', 'GetEnumerator', 0): ('silk_coll::Iter_new({r})', ''),
+    (G + 'IEnumerator`1', 'get_Current', 0): ('CURRENT', 'T'),
+    (NG + 'IEnumerator', 'MoveNext', 0): ('silk_coll::Iter_MoveNext({r})', ''),
+    (NG + 'IEnumerator', 'get_Current', 0): ('silk_coll::Iter_CurrentObj({r})', ''),
+    ('System.IDisposable', 'Dispose', 0): ('(void)0', ''),
+    (G + 'ICollection`1', 'get_Count', 0): ('silk_coll::Coll_Count({r})', ''),
+    (G + 'IReadOnlyCollection`1', 'get_Count', 0): ('silk_coll::Coll_Count({r})', ''),
+    (NG + 'ICollection', 'get_Count', 0): ('silk_coll::Coll_Count({r})', ''),
+    (G + 'IReadOnlyList`1', 'get_Item', 1): ('silk_coll::Coll_Item<{T}>({r}, {a0})', 'T'),
+    (G + 'IList`1', 'get_Item', 1): ('silk_coll::Coll_Item<{T}>({r}, {a0})', 'T'),
+    (G + 'IList`1', 'set_Item', 2): ('silk_coll::Coll_SetItem<{T}>({r}, {a0}, {a1})', 'T'),
+    (G + 'IList`1', 'IndexOf', 1): ('silk_coll::Coll_IndexOf<{T}>({r}, {a0})', 'T'),
+    (G + 'ICollection`1', 'Contains', 1): ('silk_coll::Coll_Contains<{T}>({r}, {a0})', 'T'),
+    (G + 'ICollection`1', 'Add', 1): ('(void)silk_coll::Coll_Add<{T}>({r}, {a0})', 'T'),
+    (G + 'ISet`1', 'Add', 1): ('silk_coll::Coll_Add<{T}>({r}, {a0})', 'T'),
+    (G + 'ICollection`1', 'Remove', 1): ('silk_coll::Coll_Remove<{T}>({r}, {a0})', 'T'),
+    (G + 'ICollection`1', 'Clear', 0): ('silk_coll::Coll_Clear<{T}>({r})', 'T'),
+    (G + 'IDictionary`2', 'TryGetValue', 2): ('silk_coll::Dict_TryGetValue<{K}, {V}>({r}, {a0}, {a1})', 'KV'),
+    (G + 'IReadOnlyDictionary`2', 'TryGetValue', 2): ('silk_coll::Dict_TryGetValue<{K}, {V}>({r}, {a0}, {a1})', 'KV'),
+    (G + 'IDictionary`2', 'ContainsKey', 1): ('silk_coll::Dict_ContainsKey<{K}, {V}>({r}, {a0})', 'KV'),
+    (G + 'IReadOnlyDictionary`2', 'ContainsKey', 1): ('silk_coll::Dict_ContainsKey<{K}, {V}>({r}, {a0})', 'KV'),
+    (G + 'IDictionary`2', 'get_Item', 1): ('silk_coll::Dict_get_Item<{K}, {V}>({r}, {a0})', 'KV'),
+    (G + 'IReadOnlyDictionary`2', 'get_Item', 1): ('silk_coll::Dict_get_Item<{K}, {V}>({r}, {a0})', 'KV'),
+    (G + 'IDictionary`2', 'set_Item', 2): ('silk_coll::Dict_set_Item<{K}, {V}>({r}, {a0}, {a1})', 'KV'),
+    (G + 'IDictionary`2', 'Add', 2): ('silk_coll::Dict_Add<{K}, {V}>({r}, {a0}, {a1})', 'KV'),
+    (G + 'IDictionary`2', 'Remove', 1): ('silk_coll::Dict_Remove<{K}, {V}>({r}, {a0})', 'KV'),
+    (G + 'IDictionary`2', 'get_Keys', 0): ('silk_coll::Dict_get_Keys<{K}, {V}>({r})', 'KV'),
+    (G + 'IReadOnlyDictionary`2', 'get_Keys', 0): ('silk_coll::Dict_get_Keys<{K}, {V}>({r})', 'KV'),
+    (G + 'IDictionary`2', 'get_Values', 0): ('silk_coll::Dict_get_Values<{K}, {V}>({r})', 'KV'),
+    (G + 'IReadOnlyDictionary`2', 'get_Values', 0): ('silk_coll::Dict_get_Values<{K}, {V}>({r})', 'KV'),
+}
+
 
 class CollectionEmu:
     def __init__(self, tr):
@@ -87,6 +124,103 @@ class CollectionEmu:
     def emulated(self, owner):
         owner = norm(owner)
         return owner[0] == 'gi' and owner[1] in OWNERS and not self.native(owner)
+
+    def elem_may_be_emulated(self, t):
+        """Could a converted collection with this element type exist at runtime?"""
+        t = norm(t)
+        if t[0] == 'gi' and t[1] == KVP:
+            return self.emulated(('gi', DICT, t[2], False))
+        return self.emulated(('gi', LIST, (t,), False)) or self.emulated(('gi', SET, (t,), False))
+
+    def iface(self, c, argx):
+        """Runtime-dispatch expression for an interface call that may land on a converted collection:
+        the converted helper with '{r}' as receiver, or None when no converted collection can be involved."""
+        owner = norm(c['owner'])
+        key = owner[1] if owner[0] in ('class', 'gi') else None
+        entry = IFACE.get((key, c['name'], len(c['params'])))
+        if entry is None:
+            return None
+        fn, kind = entry
+        ts = self.tr.ts
+        fmt = {'r': '{r}'}
+        fmt.update({f'a{i}': x for i, x in enumerate(argx)})
+        if kind == 'T':
+            t = owner[2][0]
+            if not self.elem_may_be_emulated(t):
+                return None
+            if fn == 'CURRENT':
+                t = norm(t)
+                if t[0] == 'gi' and t[1] == KVP:
+                    k, v = (ts.cty(a) for a in t[2])
+                    return f'rt_bitcast<{ts.cty(t)}>(silk_coll::Iter_CurrentKVP<{k}, {v}>({{r}}))'
+                fn = 'silk_coll::Iter_Current<{T}>({r})'
+            fmt['T'] = ts.cty(t)
+        elif kind == 'KV':
+            if not self.emulated(('gi', DICT, owner[2], False)):
+                return None
+            fmt['K'], fmt['V'] = (ts.cty(a) for a in owner[2])
+        return fn.format(**fmt)
+
+    def needs_linq_emulation(self, c):
+        """Enumerable.X<T...> the game can't run: a type argument is a mod-defined struct or unresolvable."""
+        if c['key'] != 'System.Linq.Enumerable' or not c['margs']:
+            return False
+        tr = self.tr
+        for m in c['margs']:
+            m = norm(m)
+            if tr.ts.is_vt(m) and m[0] in ('class', 'vt', 'gi') and tr.ts.origin(m[1]) in ('mod', 'pconly'):
+                return True
+            if tr.aqn(m) is None and not tr.ts.is_mod_ref_type(m):
+                return True
+        return False
+
+    def linq_missing(self, c):
+        """A LINQ overload the Switch build stripped (the game never used it)."""
+        if c['key'] != 'System.Linq.Enumerable' or not c['margs']:
+            return False
+        return self.tr.db.method(c['key'], c['name'], c['raw_params'], static=True) is None
+
+    def linq(self, c, argx):
+        """C++ for an emulated LINQ call, or None (not needed / not supported)."""
+        if not (self.needs_linq_emulation(c) or self.linq_missing(c)):
+            return None
+        ts = self.tr.ts
+        name, n = c['name'], len(c['params'])
+        T = ts.cty(c['margs'][0])
+        R = ts.cty(c['margs'][1]) if len(c['margs']) > 1 else None
+        a = argx
+
+        def func_arity(i):  # Func`2 vs Func`3 (index overloads are not emulated)
+            p = norm(c['params'][i])
+            return p[1] if p[0] in ('gi', 'class') else ''
+        simple = {('Count', 1): f'silk_coll::Linq_Count<{T}>({a[0]})' if n == 1 else None,
+                  ('Count', 2): f'silk_coll::Linq_CountP<{T}>({a[0]}, {a[-1]})',
+                  ('Any', 1): f'silk_coll::Linq_Any<{T}>({a[0]})' if n == 1 else None,
+                  ('Any', 2): f'silk_coll::Linq_AnyP<{T}>({a[0]}, {a[-1]})',
+                  ('All', 2): f'silk_coll::Linq_All<{T}>({a[0]}, {a[-1]})',
+                  ('ToList', 1): f'silk_coll::Linq_ToList<{T}>({a[0]})' if n == 1 else None,
+                  ('ToArray', 1): f'silk_coll::Linq_ToArray<{T}>({a[0]})' if n == 1 else None,
+                  ('Take', 2): f'silk_coll::Linq_Take<{T}>({a[0]}, {a[-1]})',
+                  ('First', 1): f'silk_coll::Linq_First<{T}>({a[0]}, nullptr, false)' if n == 1 else None,
+                  ('First', 2): f'silk_coll::Linq_First<{T}>({a[0]}, {a[-1]}, false)',
+                  ('FirstOrDefault', 1): f'silk_coll::Linq_First<{T}>({a[0]}, nullptr, true)' if n == 1 else None,
+                  ('FirstOrDefault', 2): f'silk_coll::Linq_First<{T}>({a[0]}, {a[-1]}, true)'}
+        expr = simple.get((name, n))
+        if expr is None and n == 2 and 'Func`2' in func_arity(1):
+            if name == 'Where':
+                expr = f'silk_coll::Linq_Where<{T}>({a[0]}, {a[1]})'
+            elif name == 'Select' and R:
+                expr = f'silk_coll::Linq_Select<{T}, {R}>({a[0]}, {a[1]})'
+            elif name in ('OrderBy', 'OrderByDescending') and R:
+                expr = f'silk_coll::Linq_OrderBy<{T}, {R}>({a[0]}, {a[1]}, {"true" if "Descending" in name else "false"})'
+            elif name in ('Max', 'Min', 'Sum'):
+                Rt = ts.cty(c['ret'])
+                if Rt in ('int32_t', 'int64_t', 'float', 'double'):
+                    expr = f'silk_coll::Linq_{name}<{T}, {Rt}>({a[0]}, {a[1]})'
+        if expr is None:
+            self.tr.report.add('error', f'LINQ {name} over {", ".join(sig_str(m) for m in c["margs"])} is not '
+                                        f'supported on Switch yet')
+        return expr
 
     def targs(self, owner):
         return ', '.join(self.tr.ts.cty(a) for a in owner[2])

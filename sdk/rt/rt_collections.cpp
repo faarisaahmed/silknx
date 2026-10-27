@@ -16,6 +16,76 @@ rt_modtype d_keys = {"System.Collections.Generic.KeyCollection(SilkNX)", nullptr
 rt_modtype d_values = {"System.Collections.Generic.ValueCollection(SilkNX)", nullptr, sizeof(CollView), 5, false,
                        nullptr, 0, nullptr, false, nullptr, 0, nullptr, {}, nullptr};
 
+rt_modtype d_iter = {"System.Collections.Generic.IEnumerator(SilkNX)", nullptr, sizeof(IterObj), 5, false, nullptr,
+                     0, nullptr, false, nullptr, 0, nullptr, {}, nullptr};
+
+obj Iter_new(obj coll) {
+    obj it = rt_new_mod(&d_iter);
+    auto *t = (IterObj *)it;
+    t->coll = rt_nc(coll);
+    t->version = version_of(coll);
+    return it;
+}
+
+bool Iter_MoveNext(obj it) {
+    auto *t = (IterObj *)rt_nc(it);
+    obj c = t->coll;
+    if (t->version != version_of(c)) modified();
+    if (((ModObj *)c)->desc == &d_list) {
+        if (t->index >= ((ListObj *)c)->size) return false;
+        t->index++;
+        return true;
+    }
+    auto *o = (DictObj *)backing_dict(c);
+    uint8_t *e = data(o->entries);
+    while (t->index < o->count) {
+        int32_t h = *(int32_t *)(e + (size_t)t->index * o->entry_size);
+        t->index++;
+        if (h >= 0) return true;
+    }
+    return false;
+}
+
+obj Iter_CurrentObj(obj it) {
+    auto *t = (IterObj *)rt_nc(it);
+    obj c = t->coll;
+    if (((ModObj *)c)->desc == &d_list && ((ListObj *)c)->ref_elems) return items<obj>(c)[t->index - 1];
+    auto *o = (DictObj *)backing_dict(c);
+    if (o && ((ModObj *)c)->desc != &d_values && o->ref_keys) {
+        uint8_t *e = data(o->entries) + (size_t)(t->index - 1) * o->entry_size;
+        return *(obj *)(e + o->key_off);
+    }
+    coll_unsupported(c, "non-generic IEnumerator.Current over value elements");
+}
+
+int32_t Coll_Count(obj c) {
+    obj d = backing_dict(rt_nc(c));
+    if (!d) return ((ListObj *)c)->size;
+    return ((DictObj *)d)->count - ((DictObj *)d)->free_count;
+}
+
+void coll_unsupported(obj c, const char *what) {
+    char msg[200];
+    silk::snfmt(msg, sizeof(msg), "%s on a converted %s", what, ((ModObj *)c)->desc->name);
+    rt_unsupported(msg);
+}
+
+static rt_vsite s_ienum_get = {0, -1, -1, true, "GetEnumerator", "System.Collections.IEnumerable, mscorlib|GetEnumerator|||i",
+                               nullptr, nullptr, nullptr};
+static rt_vsite s_ienum_next = {0, -1, -1, true, "MoveNext", "System.Collections.IEnumerator, mscorlib|MoveNext|||i",
+                                nullptr, nullptr, nullptr};
+static rt_vsite s_ienum_cur = {0, -1, -1, true, "get_Current", "System.Collections.IEnumerator, mscorlib|get_Current|||i",
+                               nullptr, nullptr, nullptr};
+obj src_enumerator(obj src) {
+    return ((obj(*)(obj, const void *))rt_vfn(rt_nc(src), &s_ienum_get))(src, s_ienum_get.mi);
+}
+bool src_movenext(obj e) { return ((bool (*)(obj, const void *))rt_vfn(rt_nc(e), &s_ienum_next))(e, s_ienum_next.mi); }
+obj src_current(obj e) { return ((obj(*)(obj, const void *))rt_vfn(rt_nc(e), &s_ienum_cur))(e, s_ienum_cur.mi); }
+bool is_struct_array(obj o) {
+    return o && o->klass == rt_mod_klass() && ((uintptr_t)((Il2CppArray *)o)->bounds & 1);
+}
+int32_t compare_strings(obj a, obj b) { return rt_call<int32_t>(String_CompareOrdinal, a, b); }
+
 static void *g_string_klass;
 
 bool is_string(obj o) {

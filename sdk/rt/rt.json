@@ -547,6 +547,97 @@
       "name": "Object_MemberwiseClone",
       "method": "System.Object::MemberwiseClone",
       "argc": 0
+    },
+    {
+      "name": "Texture2D_Reinitialize_format",
+      "method": "UnityEngine.Texture2D::Reinitialize",
+      "params": [
+        "int",
+        "int",
+        "UnityEngine.TextureFormat",
+        "bool"
+      ]
+    },
+    {
+      "name": "Texture2D_LoadRawTextureData_ptr",
+      "method": "UnityEngine.Texture2D::LoadRawTextureData",
+      "params": [
+        "IntPtr",
+        "int"
+      ]
+    },
+    {
+      "name": "Texture2D_Apply2",
+      "method": "UnityEngine.Texture2D::Apply",
+      "params": [
+        "bool",
+        "bool"
+      ]
+    },
+    {
+      "name": "ImageConversion_LoadImage",
+      "method": "UnityEngine.ImageConversion::LoadImage",
+      "params": [
+        "UnityEngine.Texture2D",
+        "byte[]"
+      ]
+    },
+    {
+      "name": "RenderTexture_Internal_Create",
+      "method": "UnityEngine.RenderTexture::Internal_Create",
+      "params": [
+        "UnityEngine.RenderTexture"
+      ]
+    },
+    {
+      "name": "Graphics_Internal_DrawTexture",
+      "method": "UnityEngine.Graphics::Internal_DrawTexture",
+      "params": [
+        "UnityEngine.Internal_DrawTextureArguments"
+      ]
+    },
+    {
+      "name": "RenderTexture_ctor5",
+      "method": "UnityEngine.RenderTexture::.ctor",
+      "params": [
+        "int",
+        "int",
+        "int",
+        "UnityEngine.RenderTextureFormat",
+        "UnityEngine.RenderTextureReadWrite"
+      ]
+    },
+    {
+      "name": "RenderTexture_ctor4",
+      "method": "UnityEngine.RenderTexture::.ctor",
+      "params": [
+        "int",
+        "int",
+        "int",
+        "UnityEngine.RenderTextureFormat"
+      ]
+    },
+    {
+      "name": "RenderTexture_ctor3",
+      "method": "UnityEngine.RenderTexture::.ctor",
+      "params": [
+        "int",
+        "int",
+        "int"
+      ]
+    },
+    {
+      "name": "Object_GetInstanceID",
+      "method": "UnityEngine.Object::GetInstanceID",
+      "argc": 0
+    },
+    {
+      "name": "String_CompareOrdinal",
+      "method": "System.String::CompareOrdinal",
+      "params": [
+        "string",
+        "string"
+      ]
     }
   ],
   "fields": [

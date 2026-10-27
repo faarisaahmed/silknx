@@ -133,6 +133,11 @@ def convert(plugins_dir, name='SilkNX', config_dir=None, install=False, only=Non
         shutil.copytree(src, dst, ignore=shutil.ignore_patterns('*.dll', '*.pdb', '*.xml', '.DS_Store', '._*',
                                                                 'Dumps', 'TextDumps', '*.bak*'),
                         dirs_exist_ok=True)
+    if os.environ.get('SILKNX_NO_TEXTURES') != '1':
+        from .textures import compress_pngs
+        n, raw_mb, packed_mb = compress_pngs(base, build)
+        if n:
+            print(f'  textures: {n} PNGs -> ASTC ({raw_mb:.0f} MB -> {packed_mb:.0f} MB of texture memory)')
     for asm in mods:  # embedded resources (Assembly.GetManifestResourceStream)
         for rname, data in asm.manifest_resources():
             rdir = os.path.join(base, 'resources', asm.name)

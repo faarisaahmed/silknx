@@ -96,7 +96,8 @@ static void log_with(obj self, const char *level, obj msg) {
     char name[64] = "mod", prefix[96];
     if (rt_is_mod(self)) rt_str_to_utf8(((EmuLogger *)self)->name, name, sizeof(name));
     silk::snfmt(prefix, sizeof(prefix), "[%s%s] ", level, name);
-    rt_log_obj(prefix, msg);
+    // like BepInEx's default console: debug output goes to the log only, not on screen
+    rt_log_obj(prefix, msg, strcmp_(level, "debug ") != 0);
 }
 
 void shim_BepInEx_Logging_ManualLogSource__LogInfo__object(obj self, obj msg, int32_t) { log_with(self, "", msg); }
@@ -105,8 +106,11 @@ void shim_BepInEx_Logging_ManualLogSource__LogDebug__object(obj self, obj msg, i
 void shim_BepInEx_Logging_ManualLogSource__LogWarning__object(obj self, obj msg, int32_t) { log_with(self, "warn ", msg); }
 void shim_BepInEx_Logging_ManualLogSource__LogError__object(obj self, obj msg, int32_t) { log_with(self, "ERROR ", msg); }
 void shim_BepInEx_Logging_ManualLogSource__LogFatal__object(obj self, obj msg, int32_t) { log_with(self, "FATAL ", msg); }
-void shim_BepInEx_Logging_ManualLogSource__Log__BepInEx_Logging_LogLevel_object(obj self, int32_t, obj msg, int32_t) {
-    log_with(self, "", msg);
+void shim_BepInEx_Logging_ManualLogSource__Log__BepInEx_Logging_LogLevel_object(obj self, int32_t level, obj msg,
+                                                                               int32_t) {
+    // BepInEx.Logging.LogLevel flags: Fatal 1, Error 2, Warning 4, Message 8, Info 16, Debug 32
+    const char *tag = (level & 1) ? "FATAL " : (level & 2) ? "ERROR " : (level & 4) ? "warn " : (level & 24) ? "" : "debug ";
+    log_with(self, tag, msg);
 }
 
 // ======================================================================== Harmony

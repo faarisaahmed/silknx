@@ -384,3 +384,42 @@ obj shim_System_String__Concat__object(obj a) { return concat_part(a); }
 obj shim_System_String__Concat__object_object(obj a, obj b) {
     return rt_call<obj>(rva::String_Concat2, concat_part(a), concat_part(b));
 }
+
+// File timestamps: game files never change on Switch, so every file reports the same fixed time
+// (2025-01-01 00:00 UTC). DateTime is one 64-bit word (ticks | kind << 62), returned in x0.
+static constexpr uint64_t kFixedTicks = 638712864000000000ull;
+uint64_t shim_System_IO_File__GetLastWriteTimeUtc__string(obj) { return kFixedTicks | (1ull << 62); }
+uint64_t shim_System_IO_File__GetLastWriteTime__string(obj) { return kFixedTicks; }
+uint64_t shim_System_IO_File__GetCreationTimeUtc__string(obj) { return kFixedTicks | (1ull << 62); }
+uint64_t shim_System_IO_Directory__GetLastWriteTimeUtc__string(obj) { return kFixedTicks | (1ull << 62); }
+
+obj shim_System_IO_Path__GetInvalidFileNameChars() {
+    static const char16_t bad[] = {u'"', u'<', u'>', u'|', u':', u'*', u'?', u'\\', u'/'};
+    constexpr int n = 32 + (int)(sizeof(bad) / sizeof(bad[0]));
+    obj arr = rt_call<obj>(Array_CreateInstance, rt_call<obj>(Type_GetType, rt_str("System.Char, mscorlib")), (int32_t)n);
+    auto *c = (char16_t *)((uint8_t *)arr + 0x20);
+    for (int i = 0; i < 32; i++) c[i] = (char16_t)i;
+    for (int i = 0; i < n - 32; i++) c[32 + i] = bad[i];
+    return arr;
+}
+
+static rt_vsite s_stream_read = {0, -1, -1, false, "Read",
+                                 "System.IO.Stream, mscorlib|Read|System.Byte[], mscorlib;System.Int32, mscorlib;"
+                                 "System.Int32, mscorlib||i",
+                                 nullptr, nullptr, nullptr};
+static rt_vsite s_stream_write = {0, -1, -1, false, "Write",
+                                  "System.IO.Stream, mscorlib|Write|System.Byte[], mscorlib;System.Int32, mscorlib;"
+                                  "System.Int32, mscorlib||i",
+                                  nullptr, nullptr, nullptr};
+void shim_System_IO_Stream__CopyTo__System_IO_Stream(obj self, obj dest) {
+    rt_nc(self);
+    rt_nc(dest);
+    obj buf = rt_call<obj>(Array_CreateInstance, rt_call<obj>(Type_GetType, rt_str("System.Byte, mscorlib")), 81920);
+    for (;;) {
+        int32_t n = ((int32_t(*)(obj, obj, int32_t, int32_t, const void *))rt_vfn(self, &s_stream_read))(
+            self, buf, 0, 81920, s_stream_read.mi);
+        if (n <= 0) break;
+        ((void (*)(obj, obj, int32_t, int32_t, const void *))rt_vfn(dest, &s_stream_write))(dest, buf, 0, n,
+                                                                                             s_stream_write.mi);
+    }
+}

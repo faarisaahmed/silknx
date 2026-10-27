@@ -95,7 +95,14 @@ SilkNX translates each mod's compiled C# into native Switch code and emulates th
 | Coroutines, `GetComponent/AddComponent<T>`, textures from the mod folder, Unity UI, IMGUI | Mods that depend on APIs added after the Switch version's build |
 | Generic collections, LINQ, delegates, events, exceptions (from mods *and* from the game; they are logged instead of crashing) | `try/catch` inside a mod can't catch exceptions thrown *by the game* (they're caught and logged one level up) |
 
-Tested so far: **ShowDamage HealthBar**, **Skip Intro**, **Toggle HUD**, **MapMod**.
+Tested so far: **ShowDamage HealthBar**, **Skip Intro**, **Toggle HUD**, **MapMod**, and **Stitchwork** skins
+(e.g. **Nightmare Queen**: Hornet's full skin in game).
+
+**Skins and texture packs:** the Switch gives the game far less memory than a PC, so SilkNX converts the PNGs in
+your mod folders to the Switch's own GPU texture format (ASTC) when it builds — a skin that would need ~750 MB
+needs ~190 MB. The first build of a big pack takes a couple of minutes; later builds reuse the result. Mods that
+build large textures at runtime get them at about the Switch's normal resolution. Replacement *sounds* don't work
+yet (the Switch version lacks Unity's audio-file loader).
 
 ## Modded Switch (Atmosphère)
 

@@ -1,2 +1,4 @@
 lz4
 cryptography
+numpy
+Pillow
