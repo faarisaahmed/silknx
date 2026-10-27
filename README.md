@@ -12,14 +12,22 @@ Drop your mod `.dll` files into a folder, run one command, start the game.
 
 ## What you need
 
+**Something to play on (either one):**
+
+* a **modded Switch** running Atmosphère, **or**
+* the **Ryujinx** emulator with Silksong working in it
+
+**To build the mods, a computer with:**
+
 | | |
 |---|---|
-| **A Mac** (Apple Silicon or Intel) or **Linux** | Windows users: use WSL |
-| **Ryujinx** | with Silksong already working in it |
-| **Your Silksong `.nsp`** | dumped from your own Switch (base game) |
-| **`prod.keys`** | the same keys Ryujinx uses (already in Ryujinx if the game runs) |
+| **macOS** (Apple Silicon or Intel) or **Linux** | Windows users: use WSL |
+| **Your Silksong `.nsp`** | dumped from your own Switch |
+| **Your `prod.keys`** | dumped from your own Switch (e.g. with Lockpick_RCM). Ryujinx users already have them; otherwise put them at `~/.switch/prod.keys` |
 | **Python 3.9+** | comes with macOS developer tools / most Linux |
 | **LLVM 18** | the compiler (install below) |
+
+You do **not** need the PC version of Silksong, and you do **not** need Ryujinx if you play on a modded Switch.
 
 ## Install (once)
 
@@ -33,7 +41,8 @@ brew install llvm@18          # Linux: sudo apt install clang-18 lld-18
 python3 silknx.py setup
 ```
 
-`setup` finds everything automatically (your NSP in Downloads/Desktop/Documents and the keys inside Ryujinx)
+`setup` finds everything automatically (your NSP in Downloads/Desktop/Documents, your keys in Ryujinx or
+`~/.switch/prod.keys`)
 and takes a few seconds. If it can't find something it tells you exactly what to pass, for example:
 
 ```sh
@@ -60,6 +69,7 @@ names them and says "needs a PC copy". Only if you want those, and you own Silks
    On a Mac you can instead **double-click `SilkNX.command`**.
 
 4. Start Silksong in Ryujinx. Messages from your mods appear in the top-left corner of the screen.
+   **Playing on a modded Switch instead?** Use `python3 silknx.py --atmosphere` (see *Modded Switch* below).
 
 To add or remove mods, change the `plugins` folder and run `python3 silknx.py` again.
 To turn everything off: `python3 silknx.py uninstall` (or untick **SilkNX** in Ryujinx's *Manage Mods*).
