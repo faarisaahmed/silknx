@@ -2,6 +2,7 @@
 """SilkNX - run PC (BepInEx) Silksong mods on the Switch version.
 
   python3 silknx.py              convert everything in plugins/ and install it into Ryujinx
+                                 (no Ryujinx on this computer? it makes modded-Switch SD files instead)
   python3 silknx.py setup        one-time setup (finds your NSP, keys and PC copy automatically)
   python3 silknx.py uninstall    remove the mod from Ryujinx
 
@@ -56,6 +57,12 @@ def main():
     if not os.path.isdir(a.plugins) or not find_dlls(a.plugins):
         print(f'No mods found. Put your BepInEx mods (.dll files or whole mod folders) into:\n  {a.plugins}')
         return
+    has_ryujinx = os.path.isdir(platform_paths.ryujinx_dir())
+    if not has_ryujinx and not a.no_install:
+        a.no_install = True
+        if not a.atmosphere:
+            print('Ryujinx not found on this computer: making files for a modded Switch instead.\n')
+            a.atmosphere = os.path.join(ROOT, 'switch-sd')
     build(a.plugins, a.config if os.path.isdir(a.config) else None, install=not a.no_install,
           atmosphere=a.atmosphere, only=a.only)
     where = []

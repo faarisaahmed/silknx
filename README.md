@@ -70,6 +70,7 @@ names them and says "needs a PC copy". Only if you want those, and you own Silks
 
 4. Start Silksong in Ryujinx. Messages from your mods appear in the top-left corner of the screen.
    **Playing on a modded Switch instead?** Use `python3 silknx.py --atmosphere` (see *Modded Switch* below).
+   If Ryujinx isn't installed on your computer, SilkNX does this automatically.
 
 To add or remove mods, change the `plugins` folder and run `python3 silknx.py` again.
 To turn everything off: `python3 silknx.py uninstall` (or untick **SilkNX** in Ryujinx's *Manage Mods*).
